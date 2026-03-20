@@ -10,6 +10,7 @@ reescribe el bloque EXIF del archivo JPEG. También diagnostica fotos no subidas
 
 ## Índice
 
+- [Preparar el entorno en Mac Intel (Monterey)](#preparar-el-entorno-en-mac-intel-monterey)
 - [Requisitos previos](#requisitos-previos)
 - [Instalación](#instalación)
 - [Configuración inicial](#configuración-inicial)
@@ -17,11 +18,124 @@ reescribe el bloque EXIF del archivo JPEG. También diagnostica fotos no subidas
   - [scan — detectar problemas](#scan--detectar-problemas)
   - [fix — corregir metadatos](#fix--corregir-metadatos)
   - [icloud — diagnóstico de subida](#icloud--diagnóstico-de-subida)
+  - [health — diagnóstico integral](#health--diagnóstico-integral)
+  - [export — exportar originales](#export--exportar-originales)
 - [Referencia de estados](#referencia-de-estados)
 - [Referencia de columnas CSV](#referencia-de-columnas-csv)
 - [Flujo completo recomendado](#flujo-completo-recomendado)
 - [Recuperación de emergencia](#recuperación-de-emergencia)
 - [Desarrollo](#desarrollo)
+
+---
+
+## Preparar el entorno en Mac Intel (Monterey)
+
+Esta sección cubre la instalación desde cero de todas las herramientas necesarias
+en un Mac Intel con macOS Monterey 12.7. Si ya tienes Homebrew y uv instalados,
+sáltate al paso de [Instalación](#instalación).
+
+> **Nota Intel vs Apple Silicon:** En Mac Intel, Homebrew se instala en `/usr/local`.
+> En Apple Silicon (M1/M2/M3) se instala en `/opt/homebrew`. Los comandos son los
+> mismos, pero la ruta del PATH es diferente.
+
+### 1. Instalar Homebrew
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+Añadir Homebrew al PATH (Intel):
+
+```bash
+echo 'export PATH="/usr/local/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+Verificar:
+
+```bash
+brew --version
+# Homebrew 4.x.x
+```
+
+### 2. Instalar uv
+
+uv es el gestor de dependencias y entornos virtuales que usa este proyecto.
+
+Opción A — via script oficial (recomendado):
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Opción B — via Homebrew:
+
+```bash
+brew install uv
+```
+
+Añadir uv al PATH si usaste el script:
+
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+Verificar:
+
+```bash
+uv --version
+# uv 0.x.x
+```
+
+### 3. Instalar Python 3.12
+
+uv gestiona las versiones de Python automáticamente. Para instalar Python 3.12:
+
+```bash
+uv python install 3.12
+```
+
+Verificar:
+
+```bash
+uv python list
+# cpython-3.12.x-macos-x86_64-none  ← debe aparecer esta línea
+```
+
+### 4. Instalar Claude Code (opcional — para desarrollo con IA)
+
+Claude Code requiere Node.js. Instalarlo con Homebrew:
+
+```bash
+# Instalar Node.js LTS
+brew install node
+
+# Instalar Claude Code via npm
+npm install -g @anthropic-ai/claude-code
+
+# Verificar
+claude --version
+```
+
+> Claude Code no tiene fórmula oficial en Homebrew — se instala via npm.
+> Si prefieres gestionar Node con nvm:
+>
+> ```bash
+> brew install nvm
+> nvm install --lts
+> npm install -g @anthropic-ai/claude-code
+> ```
+
+### 5. Verificar todo
+
+```bash
+brew --version      # Homebrew instalado
+uv --version        # uv instalado
+uv python list      # Python 3.12 disponible
+node --version      # Node.js (si instalaste Claude Code)
+claude --version    # Claude Code (si instalaste)
+```
 
 ---
 
@@ -236,6 +350,105 @@ Informe guardado en:
 | `--library PATH` | `~/Pictures/Photos Library.photoslibrary` | Ruta a la biblioteca |
 | `--output DIR` | `reports/` | Directorio donde guardar los informes |
 | `--format` | `both` | Formato: `csv`, `json` o `both` |
+
+---
+
+### health — diagnóstico integral
+
+Ejecuta todas las comprobaciones en un solo comando y genera un resumen completo.
+**Solo lectura — no modifica ningún archivo.**
+
+```bash
+uv run photos-fix health
+```
+
+Salida de ejemplo:
+
+```
+Analizando 51432 fotos (esto puede tardar 10-20 min)...
+[████████████████████████████████████████] 51432/51432
+
+── Resumen de salud de la biblioteca ──────────────────────
+  Total fotos escaneadas : 51432
+  OK                     : 50891
+
+  ⚠  SWAP_CONFIRMED      : 127  ← corregibles con 'fix'
+  ⚠  SUSPECT             : 14
+  ⚠  LOCAL_MISSING       : 312  ← solo en iCloud
+  ⚠  UNREADABLE          : 40
+  ⚠  ZERO_BYTE           : 3    ← archivos vacíos
+  ⚠  NO_EXIF             : 48
+  ⚠  NOT_UPLOADED        : 23   ← no subidas a iCloud
+  ⚠  ORPHANS             : 7    ← archivos sin entrada en DB
+────────────────────────────────────────────────────────────
+
+Se encontraron problemas. Revisa los informes generados.
+
+Informes guardados en:
+  reports/health_scan_20240315_150000.csv
+  reports/health_orphans_20240315_150000.csv
+  reports/health_zero_bytes_20240315_150000.csv
+  reports/health_icloud_20240315_150000.csv
+  reports/health_20240315_150000.json
+```
+
+El comando `health` genera CSV separados por tipo de problema para facilitar
+la revisión en Numbers o Excel.
+
+**Opciones:**
+
+| Opción | Default | Descripción |
+|--------|---------|-------------|
+| `--library PATH` | `~/Pictures/Photos Library.photoslibrary` | Ruta a la biblioteca |
+| `--output DIR` | `reports/` | Directorio donde guardar los informes |
+| `--format` | `both` | Formato: `csv`, `json` o `both` |
+
+---
+
+### export — exportar originales
+
+Copia todos los archivos originales de la biblioteca a un directorio plano.
+Útil para backup independiente antes de migrar o para extraer fotos no subidas.
+**No modifica la biblioteca.**
+
+```bash
+# Exportar todos los originales
+uv run photos-fix export --output /Volumes/Externo/backup-fotos/
+
+# Exportar solo las fotos NO subidas a iCloud
+uv run photos-fix export --output /Volumes/Externo/no-subidas/ --only-not-uploaded
+```
+
+En caso de nombres de archivo duplicados, añade el UUID para evitar colisiones:
+
+```
+foto.jpg → foto_XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX.jpg
+```
+
+El comando pide escribir `CONFIRMAR` antes de iniciar la copia.
+
+```
+Exportando 51432 fotos a: /Volumes/Externo/backup-fotos/
+
+Escribe "CONFIRMAR" para iniciar la copia: CONFIRMAR
+
+[████████████████████████████████████████] 51432/51432
+
+Resultados:
+  COPIED: 51108
+  LOCAL_MISSING: 312
+  SKIPPED_EXISTS: 12
+```
+
+**Opciones:**
+
+| Opción | Default | Descripción |
+|--------|---------|-------------|
+| `--library PATH` | `~/Pictures/Photos Library.photoslibrary` | Ruta a la biblioteca |
+| `--output DIR` | **requerido** | Directorio destino de la exportación |
+| `--only-not-uploaded` | — | Exportar solo fotos no subidas a iCloud |
+| `--no-skip-existing` | — | Sobreescribir archivos que ya existen en destino |
+| `--report-dir DIR` | `reports/` | Directorio donde guardar el informe |
 
 ---
 
