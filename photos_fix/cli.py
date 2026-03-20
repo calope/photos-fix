@@ -323,8 +323,13 @@ def cmd_export(args: argparse.Namespace) -> None:
         print("Cancelado.")
         sys.exit(0)
 
+    export_total = (
+        len(not_uploaded_uuids)
+        if only_not_uploaded and not_uploaded_uuids
+        else len(assets)
+    )
     with _make_progress() as progress:
-        task = progress.add_task("Exportando...", total=len(assets))
+        task = progress.add_task("Exportando...", total=export_total)
 
         def on_progress(current, total, result):
             progress.update(task, completed=current)
