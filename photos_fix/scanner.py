@@ -122,8 +122,10 @@ def scan_asset(
     elif not exif_raw:
         result.status = Status.NO_EXIF
 
-    # Fallback: comparar PIL vs DB (sin EXIF de dimensiones)
-    if result.status == Status.OK or result.status == Status.NO_EXIF:
+    # Fallback: comparar PIL vs DB (solo si no hay EXIF de dimensiones).
+    # Si EXIF está presente y coincide con PIL, la foto es correcta aunque la DB
+    # tenga valores distintos (caché desactualizada). No marcar como SUSPECT.
+    if result.status in (Status.OK, Status.NO_EXIF) and not (w_exif and h_exif):
         if w_db and h_db and w_real == h_db and h_real == w_db and w_real != h_real:
             result.status = Status.SUSPECT
 
