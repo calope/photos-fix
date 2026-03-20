@@ -1,10 +1,12 @@
 """
-CLI principal: photos-fix scan | fix | icloud
+CLI principal: photos-fix scan | fix | icloud | health | export
 
 Uso:
-  photos-fix scan [--library PATH] [--filter-size WxH] [--output DIR] [--format csv|json|both]
-  photos-fix fix  [--library PATH] [--input FILE] [--backup-dir DIR] [--dry-run]
-  photos-fix icloud [--library PATH] [--output DIR] [--format csv|json|both]
+  photos-fix scan    [--library PATH] [--filter-size WxH] [--output DIR] [--format csv|json|both]
+  photos-fix fix     [--library PATH] [--input FILE] [--backup-dir DIR] [--dry-run]
+  photos-fix icloud  [--library PATH] [--output DIR] [--format csv|json|both]
+  photos-fix health  [--library PATH] [--output DIR] [--format csv|json|both]
+  photos-fix export  [--library PATH] [--output DIR] [--only-not-uploaded] [--skip-existing]
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from __future__ import annotations
 import argparse
 import csv
 import sys
+from collections import Counter
 from pathlib import Path
 
 from photos_fix import PHOTOS_DB, PHOTOS_ORIGINALS
@@ -21,9 +24,17 @@ from photos_fix.db import (
     get_icloud_status,
     open_db,
 )
+from photos_fix.export import export_batch
 from photos_fix.fixer import FixStatus, fix_batch
+from photos_fix.health import run_health_check
 from photos_fix.icloud import get_not_uploaded
-from photos_fix.report import write_fix_report, write_icloud_report, write_scan_report
+from photos_fix.report import (
+    write_export_report,
+    write_fix_report,
+    write_health_report,
+    write_icloud_report,
+    write_scan_report,
+)
 from photos_fix.scanner import ScanResult, Status, scan_library
 
 
@@ -33,13 +44,20 @@ def _progress_bar(current: int, total: int, width: int = 40) -> str:
     return f"\r[{bar}] {current}/{total}"
 
 
+def _db_and_originals(args: argparse.Namespace) -> tuple[Path, Path]:
+    if args.library:
+        lib = Path(args.library)
+        return lib / "database" / "Photos.sqlite", lib / "originals"
+    return PHOTOS_DB, PHOTOS_ORIGINALS
+
+
+# ---------------------------------------------------------------------------
+# scan
+# ---------------------------------------------------------------------------
+
+
 def cmd_scan(args: argparse.Namespace) -> None:
-    db_path = (
-        Path(args.library) / "database" / "Photos.sqlite" if args.library else PHOTOS_DB
-    )
-    originals_dir = (
-        Path(args.library) / "originals" if args.library else PHOTOS_ORIGINALS
-    )
+    db_path, originals_dir = _db_and_originals(args)
     output_dir = Path(args.output)
 
     filter_size = None
@@ -63,19 +81,14 @@ def cmd_scan(args: argparse.Namespace) -> None:
     if filter_size:
         print(f"Filtro activo: {filter_size[0]}x{filter_size[1]}")
 
-    results: list[ScanResult] = []
-
     def on_progress(current, total, result):
         print(_progress_bar(current, total), end="", flush=True)
 
     results = scan_library(assets, originals_dir, progress_callback=on_progress)
-    print()  # nueva línea tras barra de progreso
-
-    # Resumen
-    from collections import Counter
+    print()
 
     counts = Counter(r.status.value for r in results)
-    print(f"\nResultados:")
+    print("\nResultados:")
     for status, count in sorted(counts.items()):
         print(f"  {status}: {count}")
 
@@ -84,19 +97,22 @@ def cmd_scan(args: argparse.Namespace) -> None:
         return
 
     paths = write_scan_report(results, output_dir, fmt=args.format)
-    print(f"\nInforme guardado en:")
+    print("\nInforme guardado en:")
     for p in paths:
         print(f"  {p}")
+
+
+# ---------------------------------------------------------------------------
+# fix
+# ---------------------------------------------------------------------------
 
 
 def cmd_fix(args: argparse.Namespace) -> None:
     backup_dir = Path(args.backup_dir)
     dry_run: bool = args.dry_run
 
-    # Cargar resultados del scan desde CSV
     input_path = Path(args.input) if args.input else None
     if not input_path:
-        # Buscar el CSV más reciente en reports/
         reports_dir = Path("reports")
         csvs = (
             sorted(reports_dir.glob("scan_*.csv"), reverse=True)
@@ -125,14 +141,12 @@ def cmd_fix(args: argparse.Namespace) -> None:
         print("MODO DRY-RUN: no se modificará ningún archivo.\n")
     else:
         print(f"Backup en: {backup_dir}")
-        confirm = input(f'\nEscribe "CONFIRMAR" para continuar: ')
+        confirm = input('\nEscribe "CONFIRMAR" para continuar: ')
         if confirm.strip() != "CONFIRMAR":
             print("Cancelado.")
             sys.exit(0)
 
     check_photos_running()
-
-    results = []
 
     def on_progress(current, total, result):
         print(_progress_bar(current, total), end="", flush=True)
@@ -142,10 +156,8 @@ def cmd_fix(args: argparse.Namespace) -> None:
     )
     print()
 
-    from collections import Counter
-
     counts = Counter(r.fix_status.value for r in results)
-    print(f"\nResultados:")
+    print("\nResultados:")
     for status, count in sorted(counts.items()):
         print(f"  {status}: {count}")
 
@@ -164,18 +176,18 @@ def cmd_fix(args: argparse.Namespace) -> None:
         Path(args.output) if hasattr(args, "output") else Path("reports"),
         fmt="both",
     )
-    print(f"\nInforme guardado en:")
+    print("\nInforme guardado en:")
     for p in paths:
         print(f"  {p}")
 
 
+# ---------------------------------------------------------------------------
+# icloud
+# ---------------------------------------------------------------------------
+
+
 def cmd_icloud(args: argparse.Namespace) -> None:
-    db_path = (
-        Path(args.library) / "database" / "Photos.sqlite" if args.library else PHOTOS_DB
-    )
-    originals_dir = (
-        Path(args.library) / "originals" if args.library else PHOTOS_ORIGINALS
-    )
+    db_path, originals_dir = _db_and_originals(args)
     output_dir = Path(args.output)
 
     check_photos_running()
@@ -190,14 +202,140 @@ def cmd_icloud(args: argparse.Namespace) -> None:
         return
 
     paths = write_icloud_report(results, output_dir, fmt=args.format)
-    print(f"\nInforme guardado en:")
+    print("\nInforme guardado en:")
     for p in paths:
         print(f"  {p}")
 
 
-def _load_scan_csv(path: Path) -> list[ScanResult]:
-    from photos_fix.scanner import Status
+# ---------------------------------------------------------------------------
+# health
+# ---------------------------------------------------------------------------
 
+
+def cmd_health(args: argparse.Namespace) -> None:
+    db_path, originals_dir = _db_and_originals(args)
+    output_dir = Path(args.output)
+
+    check_photos_running()
+    conn = open_db(db_path)
+    assets = get_all_assets(conn)
+    icloud_rows = get_icloud_status(conn)
+    conn.close()
+
+    print(f"Analizando {len(assets)} fotos (esto puede tardar 10-20 min)...")
+
+    def on_progress(current, total, result):
+        print(_progress_bar(current, total), end="", flush=True)
+
+    report = run_health_check(
+        assets,
+        icloud_rows,
+        originals_dir=originals_dir,
+        progress_callback=on_progress,
+    )
+    print()
+
+    summary = report.summary()
+    print("\n── Resumen de salud de la biblioteca ──────────────────────")
+    print(f"  Total fotos escaneadas : {summary['total_fotos']}")
+    print(f"  OK                     : {summary['ok']}")
+    print()
+    print(
+        f"  ⚠  SWAP_CONFIRMED      : {summary['swap_confirmed']}  ← corregibles con 'fix'"
+    )
+    print(f"  ⚠  SUSPECT             : {summary['suspect']}")
+    print(f"  ⚠  LOCAL_MISSING       : {summary['local_missing']}  ← solo en iCloud")
+    print(f"  ⚠  UNREADABLE          : {summary['unreadable']}")
+    print(f"  ⚠  ZERO_BYTE           : {summary['zero_byte']}  ← archivos vacíos")
+    print(f"  ⚠  NO_EXIF             : {summary['no_exif']}")
+    print(
+        f"  ⚠  NOT_UPLOADED        : {summary['not_uploaded']}  ← no subidas a iCloud"
+    )
+    print(
+        f"  ⚠  ORPHANS             : {summary['orphans']}  ← archivos sin entrada en DB"
+    )
+    print("────────────────────────────────────────────────────────────")
+
+    if not report.has_issues():
+        print("\n✓ Sin problemas detectados.")
+    else:
+        print("\nSe encontraron problemas. Revisa los informes generados.")
+
+    paths = write_health_report(report, output_dir, fmt=args.format)
+    print("\nInformes guardados en:")
+    for p in paths:
+        print(f"  {p}")
+
+
+# ---------------------------------------------------------------------------
+# export
+# ---------------------------------------------------------------------------
+
+
+def cmd_export(args: argparse.Namespace) -> None:
+    db_path, originals_dir = _db_and_originals(args)
+    output_dir = Path(args.output)
+    only_not_uploaded: bool = args.only_not_uploaded
+    skip_existing: bool = not args.no_skip_existing
+    report_dir = Path(args.report_dir)
+
+    check_photos_running()
+    conn = open_db(db_path)
+    assets = get_all_assets(conn)
+    not_uploaded_uuids: set[str] | None = None
+
+    if only_not_uploaded:
+        icloud_rows = get_icloud_status(conn)
+        icloud_results = get_not_uploaded(icloud_rows, originals_dir)
+        not_uploaded_uuids = {r.uuid for r in icloud_results}
+        print(f"Exportando solo fotos no subidas a iCloud: {len(not_uploaded_uuids)}")
+    else:
+        print(f"Exportando {len(assets)} fotos a: {output_dir}")
+
+    conn.close()
+
+    confirm = input('\nEscribe "CONFIRMAR" para iniciar la copia: ')
+    if confirm.strip() != "CONFIRMAR":
+        print("Cancelado.")
+        sys.exit(0)
+
+    def on_progress(current, total, result):
+        print(_progress_bar(current, total), end="", flush=True)
+
+    results = export_batch(
+        assets,
+        output_dir,
+        originals_dir=originals_dir,
+        only_not_uploaded=only_not_uploaded,
+        not_uploaded_uuids=not_uploaded_uuids,
+        skip_existing=skip_existing,
+        progress_callback=on_progress,
+    )
+    print()
+
+    counts = Counter(r.status.value for r in results)
+    print("\nResultados:")
+    for status, count in sorted(counts.items()):
+        print(f"  {status}: {count}")
+
+    errors = [r for r in results if r.status.value == "ERROR"]
+    if errors:
+        print(f"\nErrores ({len(errors)}):")
+        for r in errors[:10]:
+            print(f"  {r.filename}: {r.error}")
+
+    paths = write_export_report(results, report_dir, fmt="both")
+    print("\nInforme guardado en:")
+    for p in paths:
+        print(f"  {p}")
+
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+
+
+def _load_scan_csv(path: Path) -> list[ScanResult]:
     results = []
     with open(path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
@@ -218,6 +356,11 @@ def _load_scan_csv(path: Path) -> list[ScanResult]:
     return results
 
 
+# ---------------------------------------------------------------------------
+# main
+# ---------------------------------------------------------------------------
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="photos-fix",
@@ -232,7 +375,7 @@ def main() -> None:
     )
     p_scan.add_argument("--library", help="Ruta a la biblioteca .photoslibrary")
     p_scan.add_argument(
-        "--filter-size", metavar="WxH", help="Filtrar por tamaño en DB (ej: 3264x2448)"
+        "--filter-size", metavar="WxH", help="Filtrar por tamaño (ej: 3264x2448)"
     )
     p_scan.add_argument(
         "--output", default="reports", help="Directorio de salida (default: reports/)"
@@ -267,6 +410,38 @@ def main() -> None:
     )
     p_icloud.add_argument("--format", choices=["csv", "json", "both"], default="both")
 
+    # --- health ---
+    p_health = sub.add_parser("health", help="Diagnóstico integral de la biblioteca")
+    p_health.add_argument("--library", help="Ruta a la biblioteca .photoslibrary")
+    p_health.add_argument(
+        "--output", default="reports", help="Directorio de salida (default: reports/)"
+    )
+    p_health.add_argument("--format", choices=["csv", "json", "both"], default="both")
+
+    # --- export ---
+    p_export = sub.add_parser(
+        "export", help="Exportar originales a un directorio plano"
+    )
+    p_export.add_argument("--library", help="Ruta a la biblioteca .photoslibrary")
+    p_export.add_argument(
+        "--output", required=True, help="Directorio destino de la exportación"
+    )
+    p_export.add_argument(
+        "--only-not-uploaded",
+        action="store_true",
+        help="Exportar solo fotos no subidas a iCloud",
+    )
+    p_export.add_argument(
+        "--no-skip-existing",
+        action="store_true",
+        help="Sobreescribir archivos que ya existen en destino",
+    )
+    p_export.add_argument(
+        "--report-dir",
+        default="reports",
+        help="Directorio donde guardar el informe (default: reports/)",
+    )
+
     args = parser.parse_args()
 
     if args.command == "scan":
@@ -275,6 +450,10 @@ def main() -> None:
         cmd_fix(args)
     elif args.command == "icloud":
         cmd_icloud(args)
+    elif args.command == "health":
+        cmd_health(args)
+    elif args.command == "export":
+        cmd_export(args)
 
 
 if __name__ == "__main__":

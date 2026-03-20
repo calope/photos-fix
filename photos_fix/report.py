@@ -7,6 +7,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from photos_fix.export import ExportResult
 from photos_fix.fixer import FixResult
 from photos_fix.icloud import ICloudResult
 from photos_fix.scanner import ScanResult
@@ -154,6 +155,132 @@ def write_icloud_report(
             "assets": rows,
         }
         path = output_dir / f"icloud_{ts}.json"
+        path.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        written.append(path)
+
+    return written
+
+
+def write_health_report(
+    health_report,
+    output_dir: Path,
+    fmt: str = "both",
+) -> list[Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    ts = _now()
+    written = []
+    summary = health_report.summary()
+
+    scan_rows = [
+        {
+            "uuid": r.uuid,
+            "filename": r.filename,
+            "path": r.path,
+            "status": r.status.value,
+            "w_real": r.w_real,
+            "h_real": r.h_real,
+            "w_exif": r.w_exif,
+            "h_exif": r.h_exif,
+            "w_db": r.w_db,
+            "h_db": r.h_db,
+            "error": r.error,
+        }
+        for r in health_report.scan_results
+    ]
+    orphan_rows = [
+        {"path": o.path, "size_bytes": o.size_bytes} for o in health_report.orphans
+    ]
+    zero_rows = [
+        {"uuid": z.uuid, "filename": z.filename, "path": z.path}
+        for z in health_report.zero_bytes
+    ]
+    icloud_rows = [
+        {
+            "uuid": r.uuid,
+            "filename": r.filename,
+            "path": r.path,
+            "remote_label": r.remote_label,
+            "state_label": r.state_label,
+        }
+        for r in health_report.icloud_results
+    ]
+
+    if fmt in ("csv", "both"):
+        for name, rows in [
+            ("health_scan", scan_rows),
+            ("health_orphans", orphan_rows),
+            ("health_zero_bytes", zero_rows),
+            ("health_icloud", icloud_rows),
+        ]:
+            if not rows:
+                continue
+            path = output_dir / f"{name}_{ts}.csv"
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+                writer.writeheader()
+                writer.writerows(rows)
+            written.append(path)
+
+    if fmt in ("json", "both"):
+        data = {
+            "generated_at": datetime.now().isoformat(),
+            "summary": summary,
+            "scan": scan_rows,
+            "orphans": orphan_rows,
+            "zero_bytes": zero_rows,
+            "not_uploaded": icloud_rows,
+        }
+        path = output_dir / f"health_{ts}.json"
+        path.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        written.append(path)
+
+    return written
+
+
+def write_export_report(
+    results: list[ExportResult],
+    output_dir: Path,
+    fmt: str = "both",
+) -> list[Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    ts = _now()
+    written = []
+
+    rows = [
+        {
+            "uuid": r.uuid,
+            "filename": r.filename,
+            "src_path": r.src_path,
+            "dst_path": r.dst_path,
+            "status": r.status.value,
+            "error": r.error,
+        }
+        for r in results
+    ]
+
+    if fmt in ("csv", "both"):
+        path = output_dir / f"export_{ts}.csv"
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()) if rows else [])
+            writer.writeheader()
+            writer.writerows(rows)
+        written.append(path)
+
+    if fmt in ("json", "both"):
+        from collections import Counter
+
+        counts = Counter(r.status.value for r in results)
+        data = {
+            "generated_at": datetime.now().isoformat(),
+            "total": len(results),
+            **counts,
+            "exports": rows,
+        }
+        path = output_dir / f"export_{ts}.json"
         path.write_text(
             json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
         )
