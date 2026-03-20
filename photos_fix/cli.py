@@ -1,5 +1,5 @@
 """
-CLI principal: photos-fix scan | fix | icloud | health | export
+CLI principal: photos-fix scan | fix | icloud | health | export | album
 
 Uso:
   photos-fix scan    [--library PATH] [--filter-size WxH] [--output DIR] [--format csv|json|both]
@@ -7,6 +7,7 @@ Uso:
   photos-fix icloud  [--library PATH] [--output DIR] [--format csv|json|both]
   photos-fix health  [--library PATH] [--output DIR] [--format csv|json|both]
   photos-fix export  [--library PATH] [--output DIR] [--only-not-uploaded] [--skip-existing]
+  photos-fix album   [--input FILE] [--name NOMBRE] [--output FILE] [--run]
 """
 
 from __future__ import annotations
@@ -361,6 +362,73 @@ def cmd_export(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# album
+# ---------------------------------------------------------------------------
+
+
+def cmd_album(args: argparse.Namespace) -> None:
+    input_path = Path(args.input) if args.input else None
+    if not input_path:
+        reports_dir = Path("reports")
+        csvs = (
+            sorted(reports_dir.glob("fix_*.csv"), reverse=True)
+            if reports_dir.exists()
+            else []
+        )
+        if not csvs:
+            log.error(
+                "No se encontró informe de fix",
+                hint="Ejecuta primero: photos-fix fix",
+            )
+            sys.exit(1)
+        input_path = csvs[0]
+        log.info("Usando informe", path=str(input_path))
+
+    uuids = []
+    with open(input_path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            if row.get("fix_status") == "FIXED":
+                uuids.append(row["uuid"])
+
+    if not uuids:
+        log.warning("No hay fotos con estado FIXED en el informe")
+        return
+
+    log.info("Generando AppleScript", total=len(uuids))
+
+    album_name = args.name
+    items = ", ".join(f'(media item id "{u}")' for u in uuids)
+    script = (
+        'tell application "Photos"\n'
+        "    activate\n"
+        f'    set fixedAlbum to make new album named "{album_name}"\n'
+        f"    set theItems to {{{items}}}\n"
+        "    add theItems to fixedAlbum\n"
+        "end tell\n"
+    )
+
+    script_path = Path(args.output)
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    script_path.write_text(script, encoding="utf-8")
+    log.info("Script guardado", path=str(script_path))
+
+    if args.run:
+        import subprocess
+
+        log.info("Ejecutando en Photos.app...")
+        result = subprocess.run(
+            ["osascript", str(script_path)], capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            log.info("Álbum creado", name=album_name)
+        else:
+            log.error("Error de AppleScript", detalle=result.stderr.strip())
+            sys.exit(1)
+    else:
+        log.info("Para crear el álbum ejecuta", cmd=f"osascript {script_path}")
+
+
+# ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
 
@@ -483,6 +551,30 @@ def main() -> None:
         help="Directorio donde guardar el informe (default: reports/)",
     )
 
+    # --- album ---
+    p_album = sub.add_parser(
+        "album",
+        help="Crear álbum en Photos.app con las fotos corregidas",
+    )
+    p_album.add_argument(
+        "--input", help="CSV generado por fix (default: más reciente en reports/)"
+    )
+    p_album.add_argument(
+        "--name",
+        default="Fotos corregidas EXIF",
+        help='Nombre del álbum (default: "Fotos corregidas EXIF")',
+    )
+    p_album.add_argument(
+        "--output",
+        default="reports/create_album.applescript",
+        help="Ruta del script generado (default: reports/create_album.applescript)",
+    )
+    p_album.add_argument(
+        "--run",
+        action="store_true",
+        help="Ejecutar el script en Photos.app inmediatamente",
+    )
+
     args = parser.parse_args()
     configure_logging(verbose=args.verbose, enable_json=args.json_logs)
 
@@ -496,6 +588,8 @@ def main() -> None:
         cmd_health(args)
     elif args.command == "export":
         cmd_export(args)
+    elif args.command == "album":
+        cmd_album(args)
 
 
 if __name__ == "__main__":
