@@ -7,7 +7,7 @@ import piexif
 import pytest
 from PIL import Image
 
-from photos_fix.fixer import fix_asset, FixStatus
+from photos_fix.fixer import FixStatus, fix_asset
 from photos_fix.scanner import ScanResult, Status
 
 
@@ -36,9 +36,12 @@ def _make_scan_result(path: Path) -> ScanResult:
         filename=path.name,
         path=str(path),
         status=Status.SWAP_CONFIRMED,
-        w_real=200, h_real=100,
-        w_exif=100, h_exif=200,
-        w_db=100, h_db=200,
+        w_real=200,
+        h_real=100,
+        w_exif=100,
+        h_exif=200,
+        w_db=100,
+        h_db=200,
     )
 
 

@@ -7,9 +7,9 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from photos_fix.scanner import ScanResult
 from photos_fix.fixer import FixResult
 from photos_fix.icloud import ICloudResult
+from photos_fix.scanner import ScanResult
 
 
 def _now() -> str:
@@ -52,6 +52,7 @@ def write_scan_report(
 
     if fmt in ("json", "both"):
         from collections import Counter
+
         counts = Counter(r.status.value for r in results)
         data = {
             "generated_at": datetime.now().isoformat(),
@@ -60,7 +61,9 @@ def write_scan_report(
             "assets": rows,
         }
         path = output_dir / f"scan_{ts}.json"
-        path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        path.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
         written.append(path)
 
     return written
@@ -96,6 +99,7 @@ def write_fix_report(
 
     if fmt in ("json", "both"):
         from collections import Counter
+
         counts = Counter(r.fix_status.value for r in results)
         data = {
             "generated_at": datetime.now().isoformat(),
@@ -104,7 +108,9 @@ def write_fix_report(
             "fixes": rows,
         }
         path = output_dir / f"fix_{ts}.json"
-        path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        path.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
         written.append(path)
 
     return written
@@ -148,7 +154,9 @@ def write_icloud_report(
             "assets": rows,
         }
         path = output_dir / f"icloud_{ts}.json"
-        path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        path.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
         written.append(path)
 
     return written

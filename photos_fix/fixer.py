@@ -31,11 +31,11 @@ from photos_fix.scanner import ScanResult, Status
 class FixStatus(str, Enum):
     FIXED = "FIXED"
     DRY_RUN = "DRY_RUN"
-    SKIPPED = "SKIPPED"           # no era SWAP_CONFIRMED
-    NO_EXIF_DIMS = "NO_EXIF_DIMS" # sin PixelXDimension en EXIF
+    SKIPPED = "SKIPPED"  # no era SWAP_CONFIRMED
+    NO_EXIF_DIMS = "NO_EXIF_DIMS"  # sin PixelXDimension en EXIF
     BACKUP_FAILED = "BACKUP_FAILED"
     VERIFY_FAILED = "VERIFY_FAILED"
-    RESTORED = "RESTORED"         # falló el fix, se restauró el backup
+    RESTORED = "RESTORED"  # falló el fix, se restauró el backup
     ERROR = "ERROR"
 
 

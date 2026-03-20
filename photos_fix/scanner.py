@@ -22,12 +22,12 @@ from photos_fix import PHOTOS_ORIGINALS
 
 
 class Status(str, Enum):
-    SWAP_CONFIRMED = "SWAP_CONFIRMED"   # dimensiones EXIF exactamente intercambiadas
-    SUSPECT = "SUSPECT"                 # orientación opuesta entre PIL y DB, sin EXIF dims
+    SWAP_CONFIRMED = "SWAP_CONFIRMED"  # dimensiones EXIF exactamente intercambiadas
+    SUSPECT = "SUSPECT"  # orientación opuesta entre PIL y DB, sin EXIF dims
     OK = "OK"
-    LOCAL_MISSING = "LOCAL_MISSING"     # archivo no disponible localmente (en iCloud)
-    UNREADABLE = "UNREADABLE"           # archivo corrupto o formato no soportado
-    NO_EXIF = "NO_EXIF"                 # sin bloque EXIF (foto muy antigua o procesada)
+    LOCAL_MISSING = "LOCAL_MISSING"  # archivo no disponible localmente (en iCloud)
+    UNREADABLE = "UNREADABLE"  # archivo corrupto o formato no soportado
+    NO_EXIF = "NO_EXIF"  # sin bloque EXIF (foto muy antigua o procesada)
 
 
 @dataclass
@@ -58,7 +58,9 @@ def _asset_path(originals_dir: Path, directory: str, uuid: str, filename: str) -
     if candidate2.exists():
         return candidate2
 
-    return candidate  # devolvemos el esperado aunque no exista (FileNotFoundError luego)
+    return (
+        candidate  # devolvemos el esperado aunque no exista (FileNotFoundError luego)
+    )
 
 
 def scan_asset(

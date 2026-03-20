@@ -11,7 +11,6 @@ from pathlib import Path
 
 from photos_fix import PHOTOS_ORIGINALS
 
-
 REMOTE_AVAILABILITY = {
     1: "Disponible en iCloud",
     0: "No disponible en iCloud",
@@ -37,11 +36,15 @@ class ICloudResult:
 
     @property
     def remote_label(self) -> str:
-        return REMOTE_AVAILABILITY.get(self.remote_availability, str(self.remote_availability))
+        return REMOTE_AVAILABILITY.get(
+            self.remote_availability, str(self.remote_availability)
+        )
 
     @property
     def state_label(self) -> str:
-        return CLOUD_LOCAL_STATE.get(self.cloud_local_state, str(self.cloud_local_state))
+        return CLOUD_LOCAL_STATE.get(
+            self.cloud_local_state, str(self.cloud_local_state)
+        )
 
 
 def get_not_uploaded(
@@ -58,13 +61,15 @@ def get_not_uploaded(
         if not path.exists():
             path = originals_dir / directory / filename
 
-        results.append(ICloudResult(
-            uuid=uuid,
-            filename=filename,
-            path=str(path),
-            local_availability=row["ZLOCALAVAILABILITY"],
-            remote_availability=row["ZREMOTEAVAILABILITY"],
-            cloud_local_state=row["ZCLOUDLOCALSTATE"],
-        ))
+        results.append(
+            ICloudResult(
+                uuid=uuid,
+                filename=filename,
+                path=str(path),
+                local_availability=row["ZLOCALAVAILABILITY"],
+                remote_availability=row["ZREMOTEAVAILABILITY"],
+                cloud_local_state=row["ZCLOUDLOCALSTATE"],
+            )
+        )
 
     return results

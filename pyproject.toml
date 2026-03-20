@@ -5,8 +5,8 @@ build-backend = "hatchling.build"
 [project]
 name = "photos-fix"
 version = "0.1.0"
-description = "Diagnóstico y corrección de metadatos EXIF en fotos macOS Photos"
-requires-python = ">=3.11"
+description = "Diagnóstico y corrección de metadatos EXIF en macOS Photos"
+requires-python = ">=3.12"
 dependencies = [
     "Pillow>=10.4",
     "piexif>=1.1.3",
@@ -17,8 +17,33 @@ photos-fix = "photos_fix.cli:main"
 
 [dependency-groups]
 dev = [
+    "black>=24.0",
+    "isort>=5.13",
+    "commitizen>=4.0",
+    "pre-commit>=4.0",
     "pytest>=8.0",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["photos_fix"]
+
+[tool.black]
+line-length = 88
+target-version = ["py312"]
+
+[tool.isort]
+profile = "black"
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "0.1.0"
+version_files = [
+    "pyproject.toml:version",
+    "photos_fix/__init__.py:__version__",
+]
+tag_format = "v$version"
+update_changelog_on_bump = false
+changelog_file = "CHANGELOG.md"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

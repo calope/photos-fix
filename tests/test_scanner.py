@@ -3,13 +3,13 @@
 import io
 import struct
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import piexif
 import pytest
 from PIL import Image
 
-from photos_fix.scanner import scan_asset, Status
+from photos_fix.scanner import Status, scan_asset
 
 
 def _make_jpeg_with_exif(w: int, h: int, exif_w: int, exif_h: int) -> bytes:
@@ -32,8 +32,7 @@ def _make_jpeg_with_exif(w: int, h: int, exif_w: int, exif_h: int) -> bytes:
     return buf.getvalue()
 
 
-def _mock_row(uuid="TEST-UUID", filename="test.jpg", directory="A",
-              w_db=100, h_db=200):
+def _mock_row(uuid="TEST-UUID", filename="test.jpg", directory="A", w_db=100, h_db=200):
     row = MagicMock()
     row.__getitem__ = lambda self, key: {
         "ZUUID": uuid,

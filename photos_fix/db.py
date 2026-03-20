@@ -16,14 +16,19 @@ from photos_fix import PHOTOS_DB
 def check_photos_running() -> None:
     result = subprocess.run(["pgrep", "-x", "Photos"], capture_output=True)
     if result.returncode == 0:
-        print("ERROR: Photos está abierto. Ciérralo antes de ejecutar.", file=sys.stderr)
+        print(
+            "ERROR: Photos está abierto. Ciérralo antes de ejecutar.", file=sys.stderr
+        )
         sys.exit(1)
 
 
 def open_db(db_path: Path = PHOTOS_DB) -> sqlite3.Connection:
     if not db_path.exists():
         print(f"ERROR: No se encuentra la base de datos: {db_path}", file=sys.stderr)
-        print("Asegúrate de que la biblioteca de Fotos está en ~/Pictures/", file=sys.stderr)
+        print(
+            "Asegúrate de que la biblioteca de Fotos está en ~/Pictures/",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     try:
@@ -34,12 +39,17 @@ def open_db(db_path: Path = PHOTOS_DB) -> sqlite3.Connection:
         if "authorization" in str(e).lower() or "unable to open" in str(e).lower():
             print("ERROR: Sin acceso a la base de datos de Fotos.", file=sys.stderr)
             print("Concede Full Disk Access a Terminal.app:", file=sys.stderr)
-            print("  Ajustes del Sistema → Privacidad → Acceso completo al disco", file=sys.stderr)
+            print(
+                "  Ajustes del Sistema → Privacidad → Acceso completo al disco",
+                file=sys.stderr,
+            )
             sys.exit(1)
         raise
 
 
-def get_all_assets(conn: sqlite3.Connection, filter_size: tuple[int, int] | None = None) -> list[sqlite3.Row]:
+def get_all_assets(
+    conn: sqlite3.Connection, filter_size: tuple[int, int] | None = None
+) -> list[sqlite3.Row]:
     """
     Devuelve todas las fotos (no vídeos, no en papelera).
     filter_size: (width, height) para filtrar por tamaño en DB.
