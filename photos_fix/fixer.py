@@ -83,18 +83,25 @@ def _fix_jpeg(path: Path, exif_dict: dict, w: int, h: int) -> None:
 
 
 def _fix_heic(path: Path, w: int, h: int) -> None:
-    """Intercambia dimensiones EXIF en HEIC usando exiftool (sin re-encodificar)."""
-    subprocess.run(
+    """Intercambia dimensiones EXIF en HEIC usando exiftool (sin re-encodificar).
+
+    exiftool usa ExifImageWidth/ExifImageHeight como nombres canónicos para
+    los tags EXIF 0xA002/0xA003 (PixelXDimension/PixelYDimension del estándar).
+    """
+    proc = subprocess.run(
         [
             "exiftool",
-            f"-PixelXDimension={h}",
-            f"-PixelYDimension={w}",
+            f"-ExifImageWidth={h}",
+            f"-ExifImageHeight={w}",
             "-overwrite_original",
             str(path),
         ],
         capture_output=True,
-        check=True,
+        text=True,
     )
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout).strip()
+        raise RuntimeError(f"exiftool: {detail}")
 
 
 def fix_asset(
