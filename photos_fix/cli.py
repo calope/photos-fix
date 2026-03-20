@@ -8,12 +8,14 @@ Uso:
   photos-fix health  [--library PATH] [--output DIR] [--format csv|json|both]
   photos-fix export  [--library PATH] [--output DIR] [--only-not-uploaded] [--skip-existing]
   photos-fix album   [--input FILE] [--filter ESTADOS] [--name NOMBRE] [--output FILE] [--run]
+  photos-fix quarantine [--input FILE] [--dest DIR] [--dry-run]
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import shutil
 import sys
 from collections import Counter
 from pathlib import Path
@@ -450,6 +452,90 @@ def cmd_album(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# quarantine
+# ---------------------------------------------------------------------------
+
+
+def cmd_quarantine(args: argparse.Namespace) -> None:
+    input_path = Path(args.input) if args.input else None
+    if not input_path:
+        reports_dir = Path("reports")
+        csvs = (
+            sorted(reports_dir.glob("health_orphans_*.csv"), reverse=True)
+            if reports_dir.exists()
+            else []
+        )
+        if not csvs:
+            log.error(
+                "No se encontró informe de orphans",
+                hint="Ejecuta primero: photos-fix health",
+            )
+            sys.exit(1)
+        input_path = csvs[0]
+        log.info("Usando informe", path=str(input_path))
+
+    dest = Path(args.dest)
+    dry_run = args.dry_run
+
+    orphans = []
+    with open(input_path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            orphans.append(row)
+
+    if not orphans:
+        log.warning("No hay archivos orphan en el informe")
+        return
+
+    total_size = sum(int(r.get("size_bytes", 0)) for r in orphans)
+    log.info(
+        "Orphans a mover",
+        total=len(orphans),
+        size_gb=f"{total_size / 1024 / 1024 / 1024:.1f}",
+    )
+
+    if dry_run:
+        log.info("Modo dry-run — no se moverá ningún archivo")
+        for r in orphans[:5]:
+            log.info("  Movería", path=r["path"])
+        if len(orphans) > 5:
+            log.info(f"  ... y {len(orphans) - 5} más")
+        return
+
+    confirm = input('\nEscribe "CONFIRMAR" para continuar: ')
+    if confirm.strip() != "CONFIRMAR":
+        print("Cancelado.")
+        return
+
+    dest.mkdir(parents=True, exist_ok=True)
+    moved = 0
+    errors = 0
+
+    for r in orphans:
+        src = Path(r["path"])
+        if not src.exists():
+            errors += 1
+            continue
+        # Preservar estructura de directorios relativa a originals/
+        try:
+            rel = src.relative_to(
+                src.parents[1]
+            )  # directorio_hex/filename
+        except ValueError:
+            rel = Path(src.name)
+        dst = dest / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.move(str(src), str(dst))
+            moved += 1
+        except Exception as e:
+            log.error("Error moviendo", path=str(src), error=str(e))
+            errors += 1
+
+    log.info("Cuarentena completada", movidos=moved, errores=errors)
+    log.info("Archivos en", dest=str(dest))
+
+
+# ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
 
@@ -602,6 +688,26 @@ def main() -> None:
         help="Ejecutar el script en Photos.app inmediatamente",
     )
 
+    # --- quarantine ---
+    p_quarantine = sub.add_parser(
+        "quarantine",
+        help="Mover archivos orphan a cuarentena",
+    )
+    p_quarantine.add_argument(
+        "--input",
+        help="CSV de orphans (default: más reciente en reports/)",
+    )
+    p_quarantine.add_argument(
+        "--dest",
+        default="quarantine",
+        help='Carpeta destino (default: "quarantine/")',
+    )
+    p_quarantine.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Solo mostrar qué se movería",
+    )
+
     args = parser.parse_args()
     configure_logging(verbose=args.verbose, enable_json=args.json_logs)
 
@@ -617,6 +723,8 @@ def main() -> None:
         cmd_export(args)
     elif args.command == "album":
         cmd_album(args)
+    elif args.command == "quarantine":
+        cmd_quarantine(args)
 
 
 if __name__ == "__main__":
