@@ -17,6 +17,9 @@ from pathlib import Path
 
 import piexif
 from PIL import Image, UnidentifiedImageError
+from pillow_heif import register_heif_opener
+
+register_heif_opener()  # habilita PIL.Image.open() para HEIC/HEIF
 
 from photos_fix import PHOTOS_ORIGINALS
 

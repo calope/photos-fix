@@ -132,8 +132,9 @@ def _find_orphans(
         ".m4v",
     }
 
-    # Construir conjunto de rutas conocidas por la DB
+    # Construir conjunto de rutas y UUIDs conocidos por la DB
     known_paths: set[str] = set()
+    known_uuids: set[str] = set()
     for row in assets:
         uuid = row["ZUUID"]
         filename = row["ZFILENAME"]
@@ -143,6 +144,7 @@ def _find_orphans(
         p2 = originals_dir / directory / filename
         known_paths.add(str(p1))
         known_paths.add(str(p2))
+        known_uuids.add(uuid)
 
     orphans = []
     if not originals_dir.exists():
@@ -153,8 +155,20 @@ def _find_orphans(
             continue
         if f.suffix.lower() not in IMAGE_EXTENSIONS:
             continue
-        if str(f) not in known_paths:
-            orphans.append(OrphanResult(path=str(f), size_bytes=f.stat().st_size))
+        if str(f) in known_paths:
+            continue
+
+        # Descartar derivados internos de Photos: UUID_3.mov (Live Photo video),
+        # UUID_O.heic (original antes de edición), etc.
+        # Si el UUID base existe en ZASSET, Photos gestiona este archivo
+        # a través de ZINTERNALRESOURCE — no es un huérfano real.
+        stem = f.stem  # ej: "F9BBAB17-09F9-481E-8A4C-1E19F3A2E437_3"
+        if "_" in stem:
+            base_uuid = stem.rsplit("_", 1)[0]
+            if base_uuid in known_uuids:
+                continue
+
+        orphans.append(OrphanResult(path=str(f), size_bytes=f.stat().st_size))
 
     return orphans
 
