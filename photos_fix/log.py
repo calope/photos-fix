@@ -1,13 +1,13 @@
 """
-Configuración de structlog para photos-fix.
+Configuración de structlog + rich para photos-fix.
 
 Copiado y adaptado de stlog-dconf (workspace MutuaTFE 2.0).
 Autónomo — sin dependencia del paquete interno stlog-dconf.
 
 Uso:
-    from photos_fix.log import configure_logging, get_logger
+    from photos_fix.log import configure_logging, get_logger, get_console
 
-    configure_logging()                    # ConsoleRenderer con colores
+    configure_logging()                    # RichHandler con colores
     configure_logging(enable_json=True)    # JSONRenderer (para pipes / CI)
     configure_logging(verbose=True)        # incluye módulo y línea de código
 
@@ -15,13 +15,49 @@ Uso:
     log.info("Escaneando biblioteca", total=51432)
     log.warning("Fotos con problemas", swap_confirmed=127)
     log.error("Sin acceso a la base de datos", path=str(db_path))
+
+La instancia de Console compartida (get_console()) debe usarse también en
+rich.progress.Progress para evitar conflictos de pintado en el terminal:
+
+    from rich.progress import Progress
+    from photos_fix.log import get_console
+
+    with Progress(console=get_console()) as progress:
+        ...
 """
 
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import structlog
+from rich.console import Console
+from rich.logging import RichHandler
+
+_console = Console()
+
+
+def get_console() -> Console:
+    """Devuelve la instancia de Console compartida con el logging handler."""
+    return _console
+
+
+def _plain_renderer(logger: Any, method: str, event_dict: dict) -> str:
+    """
+    Renderer minimalista para RichHandler.
+
+    Extrae el evento como mensaje y formatea el resto de claves como k=v.
+    Elimina las claves que RichHandler ya muestra (timestamp, level, logger).
+    """
+    event = event_dict.pop("event", "")
+    for key in ("timestamp", "level", "logger"):
+        event_dict.pop(key, None)
+    if event_dict:
+        extras = "  " + "  ".join(f"{k}={v}" for k, v in event_dict.items())
+    else:
+        extras = ""
+    return f"{event}{extras}"
 
 
 def configure_logging(
@@ -37,7 +73,7 @@ def configure_logging(
 
     Args:
         level:       Nivel de log raíz (default: INFO).
-        enable_json: Usar JSONRenderer en vez de ConsoleRenderer.
+        enable_json: Usar JSONRenderer en vez de RichHandler.
         verbose:     Incluir módulo, función y línea en cada mensaje.
         force:       Resetear y reconfigurar (útil para tests).
     """
@@ -80,28 +116,39 @@ def configure_logging(
         logger_factory=structlog.stdlib.LoggerFactory(),
     )
 
-    if enable_json:
-        renderer = structlog.processors.JSONRenderer()
-    else:
-        renderer = structlog.dev.ConsoleRenderer(
-            exception_formatter=structlog.dev.better_traceback
-        )
-
-    formatter = structlog.stdlib.ProcessorFormatter(
-        foreign_pre_chain=shared_processors,
-        processors=[
-            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
-            renderer,
-        ],
-        keep_stack_info=True,
-    )
-
     root = logging.getLogger()
     root.handlers.clear()
     root.setLevel(level)
 
-    handler = logging.StreamHandler()
-    handler.setFormatter(formatter)
+    if enable_json:
+        formatter = structlog.stdlib.ProcessorFormatter(
+            foreign_pre_chain=shared_processors,
+            processors=[
+                structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+                structlog.processors.JSONRenderer(),
+            ],
+            keep_stack_info=True,
+        )
+        handler: logging.Handler = logging.StreamHandler()
+        handler.setFormatter(formatter)
+    else:
+        formatter = structlog.stdlib.ProcessorFormatter(
+            foreign_pre_chain=shared_processors,
+            processors=[
+                structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+                _plain_renderer,
+            ],
+            keep_stack_info=True,
+        )
+        handler = RichHandler(
+            console=_console,
+            rich_tracebacks=True,
+            show_time=True,
+            show_level=True,
+            show_path=verbose,
+        )
+        handler.setFormatter(formatter)
+
     handler.setLevel(logging.NOTSET)
     root.addHandler(handler)
 

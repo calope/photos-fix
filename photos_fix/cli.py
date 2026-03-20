@@ -17,6 +17,15 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeRemainingColumn,
+)
+
 from photos_fix import PHOTOS_DB, PHOTOS_ORIGINALS
 from photos_fix.db import (
     check_photos_running,
@@ -28,7 +37,7 @@ from photos_fix.export import export_batch
 from photos_fix.fixer import FixStatus, fix_batch
 from photos_fix.health import run_health_check
 from photos_fix.icloud import get_not_uploaded
-from photos_fix.log import configure_logging, get_logger
+from photos_fix.log import configure_logging, get_console, get_logger
 from photos_fix.report import (
     write_export_report,
     write_fix_report,
@@ -41,10 +50,16 @@ from photos_fix.scanner import ScanResult, Status, scan_library
 log = get_logger(__name__)
 
 
-def _progress_bar(current: int, total: int, width: int = 40) -> str:
-    filled = int(width * current / total) if total else 0
-    bar = "█" * filled + "░" * (width - filled)
-    return f"\r[{bar}] {current}/{total}"
+def _make_progress() -> Progress:
+    """Barra de progreso rich con la configuración estándar del proyecto."""
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("[bold]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeRemainingColumn(),
+        console=get_console(),
+    )
 
 
 def _db_and_originals(args: argparse.Namespace) -> tuple[Path, Path]:
@@ -85,11 +100,13 @@ def cmd_scan(args: argparse.Namespace) -> None:
     if filter_size:
         log.info("Filtro activo", width=filter_size[0], height=filter_size[1])
 
-    def on_progress(current, total, result):
-        print(_progress_bar(current, total), end="", flush=True)
+    with _make_progress() as progress:
+        task = progress.add_task("Escaneando...", total=len(assets))
 
-    results = scan_library(assets, originals_dir, progress_callback=on_progress)
-    print()
+        def on_progress(current, total, result):
+            progress.update(task, completed=current)
+
+        results = scan_library(assets, originals_dir, progress_callback=on_progress)
 
     counts = Counter(r.status.value for r in results)
     print("\nResultados:")
@@ -151,13 +168,15 @@ def cmd_fix(args: argparse.Namespace) -> None:
 
     check_photos_running()
 
-    def on_progress(current, total, result):
-        print(_progress_bar(current, total), end="", flush=True)
+    with _make_progress() as progress:
+        task = progress.add_task("Corrigiendo...", total=len(candidates))
 
-    results = fix_batch(
-        candidates, backup_dir, dry_run=dry_run, progress_callback=on_progress
-    )
-    print()
+        def on_progress(current, total, result):
+            progress.update(task, completed=current)
+
+        results = fix_batch(
+            candidates, backup_dir, dry_run=dry_run, progress_callback=on_progress
+        )
 
     counts = Counter(r.fix_status.value for r in results)
     print("\nResultados:")
@@ -225,16 +244,18 @@ def cmd_health(args: argparse.Namespace) -> None:
 
     log.info("Analizando biblioteca", total=len(assets), aviso="puede tardar 10-20 min")
 
-    def on_progress(current, total, result):
-        print(_progress_bar(current, total), end="", flush=True)
+    with _make_progress() as progress:
+        task = progress.add_task("Analizando...", total=len(assets))
 
-    report = run_health_check(
-        assets,
-        icloud_rows,
-        originals_dir=originals_dir,
-        progress_callback=on_progress,
-    )
-    print()
+        def on_progress(current, total, result):
+            progress.update(task, completed=current)
+
+        report = run_health_check(
+            assets,
+            icloud_rows,
+            originals_dir=originals_dir,
+            progress_callback=on_progress,
+        )
 
     summary = report.summary()
     print("\n── Resumen de salud de la biblioteca ──────────────────────")
@@ -302,19 +323,21 @@ def cmd_export(args: argparse.Namespace) -> None:
         print("Cancelado.")
         sys.exit(0)
 
-    def on_progress(current, total, result):
-        print(_progress_bar(current, total), end="", flush=True)
+    with _make_progress() as progress:
+        task = progress.add_task("Exportando...", total=len(assets))
 
-    results = export_batch(
-        assets,
-        output_dir,
-        originals_dir=originals_dir,
-        only_not_uploaded=only_not_uploaded,
-        not_uploaded_uuids=not_uploaded_uuids,
-        skip_existing=skip_existing,
-        progress_callback=on_progress,
-    )
-    print()
+        def on_progress(current, total, result):
+            progress.update(task, completed=current)
+
+        results = export_batch(
+            assets,
+            output_dir,
+            originals_dir=originals_dir,
+            only_not_uploaded=only_not_uploaded,
+            not_uploaded_uuids=not_uploaded_uuids,
+            skip_existing=skip_existing,
+            progress_callback=on_progress,
+        )
 
     counts = Counter(r.status.value for r in results)
     print("\nResultados:")
