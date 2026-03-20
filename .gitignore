@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+*.egg-info/
+.env
+backups/
+reports/
+*.csv
+*.json
+!tests/fixtures/*.json
+.DS_Store

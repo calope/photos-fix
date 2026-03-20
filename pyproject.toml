@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "photos-fix"
+version = "0.1.0"
+description = "Diagnóstico y corrección de metadatos EXIF en fotos macOS Photos"
+requires-python = ">=3.11"
+dependencies = [
+    "Pillow>=10.4",
+    "piexif>=1.1.3",
+]
+
+[project.scripts]
+photos-fix = "photos_fix.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["photos_fix"]
