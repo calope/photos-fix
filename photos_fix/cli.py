@@ -7,7 +7,7 @@ Uso:
   photos-fix icloud  [--library PATH] [--output DIR] [--format csv|json|both]
   photos-fix health  [--library PATH] [--output DIR] [--format csv|json|both]
   photos-fix export  [--library PATH] [--output DIR] [--only-not-uploaded] [--skip-existing]
-  photos-fix album   [--input FILE] [--name NOMBRE] [--output FILE] [--run]
+  photos-fix album   [--input FILE] [--filter ESTADOS] [--name NOMBRE] [--output FILE] [--run]
 """
 
 from __future__ import annotations
@@ -367,18 +367,24 @@ def cmd_export(args: argparse.Namespace) -> None:
 
 
 def cmd_album(args: argparse.Namespace) -> None:
+    filters = {f.strip().upper() for f in args.filter.split(",")}
     input_path = Path(args.input) if args.input else None
+
     if not input_path:
         reports_dir = Path("reports")
+        # Si el filtro incluye estados de health, buscar health_scan_*.csv
+        health_states = {"SUSPECT", "SWAP_CONFIRMED", "NO_EXIF", "UNREADABLE", "ZERO_BYTE"}
+        use_health = bool(filters & health_states)
+        glob_pattern = "health_scan_*.csv" if use_health else "fix_*.csv"
         csvs = (
-            sorted(reports_dir.glob("fix_*.csv"), reverse=True)
+            sorted(reports_dir.glob(glob_pattern), reverse=True)
             if reports_dir.exists()
             else []
         )
         if not csvs:
             log.error(
-                "No se encontró informe de fix",
-                hint="Ejecuta primero: photos-fix fix",
+                "No se encontró informe",
+                hint="Ejecuta primero: photos-fix health o photos-fix fix",
             )
             sys.exit(1)
         input_path = csvs[0]
@@ -387,11 +393,13 @@ def cmd_album(args: argparse.Namespace) -> None:
     uuids = []
     with open(input_path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
-            if row.get("fix_status") == "FIXED":
+            # Soportar tanto CSVs de fix (fix_status) como de health (status)
+            status = row.get("fix_status") or row.get("status", "")
+            if status.upper() in filters:
                 uuids.append(row["uuid"])
 
     if not uuids:
-        log.warning("No hay fotos con estado FIXED en el informe")
+        log.warning("No hay fotos con estados %s en el informe", filters)
         return
 
     log.info("Generando AppleScript", total=len(uuids))
@@ -563,7 +571,13 @@ def main() -> None:
         help="Crear álbum en Photos.app con las fotos corregidas",
     )
     p_album.add_argument(
-        "--input", help="CSV generado por fix (default: más reciente en reports/)"
+        "--input", help="CSV generado por fix o health (default: más reciente en reports/)"
+    )
+    p_album.add_argument(
+        "--filter",
+        default="FIXED",
+        help='Estados a incluir, separados por coma (default: "FIXED"). '
+        "Valores: FIXED, SUSPECT, SWAP_CONFIRMED, NO_EXIF, OK, etc.",
     )
     p_album.add_argument(
         "--name",
