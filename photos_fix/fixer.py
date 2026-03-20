@@ -88,34 +88,50 @@ def _fix_jpeg(path: Path, exif_dict: dict, w: int, h: int) -> None:
     piexif.insert(new_exif_bytes, str(path))
 
 
-def _fix_iphoto_rotated(path: Path) -> None:
-    """Corrige fotos deformadas por iPhoto 9: resize + rotar 90° CCW.
+def _fix_iphoto_rotated(path: Path, backup_path: Path) -> None:
+    """Corrige deformación de fotos portrait procesadas por iPhoto 9.
 
-    iPhoto 9 re-escaló los píxeles (ancho↔alto) sin rotarlos.
-    Para revertirlo: resize a (h, w) deshace la deformación,
-    luego rotar 90° CCW pone la orientación correcta.
+    iPhoto 9 re-escaló los píxeles (aplastó ancho, estiró alto) sin rotarlos.
+    Solo aplica a fotos portrait (h > w). Las landscape se saltan.
+
+    Proceso en dos pasos (necesario por cómo piexif afecta la decodificación):
+      Paso 1: resize(h,w) + ROTATE_90, guardar con piexif EXIF
+      Paso 2: abrir resultado, resize(h,w) + ROTATE_270, guardar limpio
+
+    La rotación final puede no ser correcta para todas las fotos —
+    el usuario debe corregirla manualmente en Photos.app después.
     """
     with Image.open(path) as img:
         w, h = img.size
-        exif_raw = img.info.get("exif", b"")
-        # 1. Resize: intercambiar dimensiones para deshacer deformación
-        fixed = img.resize((h, w), Image.LANCZOS)
-        # 2. Rotar 90° CCW para orientación correcta
-        fixed = fixed.transpose(Image.ROTATE_90)
 
-    # Preservar EXIF original (dimensiones finales = w x h, igual que original)
+        # Solo corregir portrait (h > w) — landscape no está deformada
+        if h <= w:
+            return
+
+        exif_raw = img.info.get("exif", b"")
+
+        # Paso 1: resize + rotate + piexif (intermedio necesario)
+        fixed1 = img.resize((h, w), Image.LANCZOS).transpose(Image.ROTATE_90)
+
     if exif_raw:
         try:
             exif_dict = piexif.load(exif_raw)
             exif_dict["Exif"][piexif.ExifIFD.PixelXDimension] = w
             exif_dict["Exif"][piexif.ExifIFD.PixelYDimension] = h
-            new_exif = piexif.dump(exif_dict)
-            fixed.save(str(path), quality=95, exif=new_exif)
+            fixed1.save(str(path), quality=95, exif=piexif.dump(exif_dict))
         except Exception:
-            fixed.save(str(path), quality=95)
+            fixed1.save(str(path), quality=95)
     else:
-        fixed.save(str(path), quality=95)
-    fixed.close()
+        fixed1.save(str(path), quality=95)
+    fixed1.close()
+
+    # Paso 2: resize + ROTATE_270 sobre el resultado del paso 1
+    with Image.open(path) as img2:
+        w2, h2 = img2.size
+        fixed2 = img2.resize((h2, w2), Image.LANCZOS).transpose(Image.ROTATE_270)
+
+    fixed2.save(str(path), quality=95)
+    fixed2.close()
 
 
 def _fix_heic(path: Path, w: int, h: int) -> None:
@@ -216,7 +232,7 @@ def fix_asset(
     # Fix según tipo
     try:
         if is_iphoto:
-            _fix_iphoto_rotated(path)
+            _fix_iphoto_rotated(path, backup_path)
         elif is_heic:
             _fix_heic(path, w, h)
         else:
