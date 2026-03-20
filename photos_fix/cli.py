@@ -401,7 +401,13 @@ def cmd_album(args: argparse.Namespace) -> None:
     script = (
         'tell application "Photos"\n'
         "    activate\n"
-        f'    set fixedAlbum to make new album named "{album_name}"\n'
+        f'    set albumName to "{album_name}"\n'
+        "    set matchingAlbums to (every album whose name = albumName)\n"
+        "    if (count of matchingAlbums) > 0 then\n"
+        "        set fixedAlbum to item 1 of matchingAlbums\n"
+        "    else\n"
+        "        set fixedAlbum to make new album named albumName\n"
+        "    end if\n"
         f"    set theItems to {{{items}}}\n"
         "    add theItems to fixedAlbum\n"
         "end tell\n"
