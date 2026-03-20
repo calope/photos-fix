@@ -55,6 +55,7 @@ class HealthReport:
         return {
             "total_fotos": len(self.scan_results),
             "swap_confirmed": scan_counts.get(Status.SWAP_CONFIRMED.value, 0),
+            "iphoto_rotated": scan_counts.get(Status.IPHOTO_ROTATED.value, 0),
             "suspect": scan_counts.get(Status.SUSPECT.value, 0),
             "ok": scan_counts.get(Status.OK.value, 0),
             "no_exif": scan_counts.get(Status.NO_EXIF.value, 0),
@@ -71,6 +72,7 @@ class HealthReport:
             s[k] > 0
             for k in (
                 "swap_confirmed",
+                "iphoto_rotated",
                 "suspect",
                 "local_missing",
                 "unreadable",

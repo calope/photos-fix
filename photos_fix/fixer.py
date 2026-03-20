@@ -116,7 +116,7 @@ def fix_asset(
         fix_status=FixStatus.SKIPPED,
     )
 
-    if scan_result.status != Status.SWAP_CONFIRMED:
+    if scan_result.status not in (Status.SWAP_CONFIRMED, Status.IPHOTO_ROTATED):
         return result
 
     path = Path(scan_result.path)
@@ -213,7 +213,11 @@ def fix_batch(
     dry_run: bool = False,
     progress_callback=None,
 ) -> list[FixResult]:
-    candidates = [r for r in scan_results if r.status == Status.SWAP_CONFIRMED]
+    candidates = [
+        r
+        for r in scan_results
+        if r.status in (Status.SWAP_CONFIRMED, Status.IPHOTO_ROTATED)
+    ]
     results = []
     total = len(candidates)
 

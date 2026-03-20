@@ -150,10 +150,14 @@ def cmd_fix(args: argparse.Namespace) -> None:
         log.info("Usando informe", path=str(input_path))
 
     scan_results = _load_scan_csv(input_path)
-    candidates = [r for r in scan_results if r.status == Status.SWAP_CONFIRMED]
+    candidates = [
+        r
+        for r in scan_results
+        if r.status in (Status.SWAP_CONFIRMED, Status.IPHOTO_ROTATED)
+    ]
 
     if not candidates:
-        log.warning("No hay fotos con SWAP_CONFIRMED — nada que corregir")
+        log.warning("No hay fotos con SWAP_CONFIRMED o IPHOTO_ROTATED — nada que corregir")
         return
 
     log.info("Fotos a corregir", total=len(candidates))
@@ -266,6 +270,9 @@ def cmd_health(args: argparse.Namespace) -> None:
     print(
         f"  ⚠  SWAP_CONFIRMED      : {summary['swap_confirmed']}  ← corregibles con 'fix'"
     )
+    print(
+        f"  ⚠  IPHOTO_ROTATED      : {summary['iphoto_rotated']}  ← iPhoto 9 rotó píxeles"
+    )
     print(f"  ⚠  SUSPECT             : {summary['suspect']}")
     print(f"  ⚠  LOCAL_MISSING       : {summary['local_missing']}  ← solo en iCloud")
     print(f"  ⚠  UNREADABLE          : {summary['unreadable']}")
@@ -373,7 +380,7 @@ def cmd_album(args: argparse.Namespace) -> None:
     if not input_path:
         reports_dir = Path("reports")
         # Si el filtro incluye estados de health, buscar health_scan_*.csv
-        health_states = {"SUSPECT", "SWAP_CONFIRMED", "NO_EXIF", "UNREADABLE", "ZERO_BYTE"}
+        health_states = {"SUSPECT", "SWAP_CONFIRMED", "IPHOTO_ROTATED", "NO_EXIF", "UNREADABLE", "ZERO_BYTE"}
         use_health = bool(filters & health_states)
         glob_pattern = "health_scan_*.csv" if use_health else "fix_*.csv"
         csvs = (
@@ -577,7 +584,7 @@ def main() -> None:
         "--filter",
         default="FIXED",
         help='Estados a incluir, separados por coma (default: "FIXED"). '
-        "Valores: FIXED, SUSPECT, SWAP_CONFIRMED, NO_EXIF, OK, etc.",
+        "Valores: FIXED, SUSPECT, SWAP_CONFIRMED, IPHOTO_ROTATED, NO_EXIF, OK, etc.",
     )
     p_album.add_argument(
         "--name",

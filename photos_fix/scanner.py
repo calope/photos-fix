@@ -26,6 +26,7 @@ from photos_fix import PHOTOS_ORIGINALS
 
 class Status(str, Enum):
     SWAP_CONFIRMED = "SWAP_CONFIRMED"  # dimensiones EXIF exactamente intercambiadas
+    IPHOTO_ROTATED = "IPHOTO_ROTATED"  # iPhoto 9 rotó píxeles y dejó Orientation=1
     SUSPECT = "SUSPECT"  # orientación opuesta entre PIL y DB, sin EXIF dims
     OK = "OK"
     LOCAL_MISSING = "LOCAL_MISSING"  # archivo no disponible localmente (en iCloud)
@@ -106,24 +107,45 @@ def scan_asset(
 
     # Leer dimensiones EXIF
     w_exif = h_exif = None
+    orientation = None
+    software = None
     if exif_raw:
         try:
             exif_dict = piexif.load(exif_raw)
             w_exif = exif_dict["Exif"].get(piexif.ExifIFD.PixelXDimension)
             h_exif = exif_dict["Exif"].get(piexif.ExifIFD.PixelYDimension)
+            orientation = exif_dict["0th"].get(piexif.ImageIFD.Orientation)
+            sw_raw = exif_dict["0th"].get(piexif.ImageIFD.Software, b"")
+            if isinstance(sw_raw, bytes):
+                software = sw_raw.decode("utf-8", errors="replace").strip()
+            else:
+                software = str(sw_raw).strip()
         except Exception:
             pass
 
     result.w_exif = w_exif
     result.h_exif = h_exif
 
-    # Detección: comparar PIL vs EXIF
+    # Detección 1: comparar PIL vs EXIF (swap clásico)
     if w_exif and h_exif:
         if w_real == h_exif and h_real == w_exif and w_real != h_real:
             result.status = Status.SWAP_CONFIRMED
             return result
     elif not exif_raw:
         result.status = Status.NO_EXIF
+
+    # Detección 2: iPhoto 9.x rotó los píxeles y dejó Orientation=1.
+    # PIL=EXIF=DB coinciden, pero la foto se ve girada en Photos.
+    # Patrón: Software=iPhoto 9.*, Orientation=1, dimensiones no cuadradas.
+    if (
+        result.status == Status.OK
+        and software
+        and software.startswith("iPhoto 9")
+        and orientation == 1
+        and w_real != h_real
+    ):
+        result.status = Status.IPHOTO_ROTATED
+        return result
 
     # Fallback: comparar PIL vs DB (solo si no hay EXIF de dimensiones).
     # Si EXIF está presente y coincide con PIL, la foto es correcta aunque la DB
