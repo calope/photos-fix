@@ -1,17 +1,23 @@
 """
-Corrección de metadatos EXIF: intercambia PixelXDimension ↔ PixelYDimension.
+Corrección de metadatos EXIF y píxeles deformados por iPhoto 9.
 
-NO modifica el pixel data.
+Dos tipos de fix:
 
-JPEG: piexif.insert() reemplaza solo el bloque EXIF sin recomprimir.
-HEIC: exiftool modifica solo los metadatos en el contenedor HEIF sin re-encodificar.
+SWAP_CONFIRMED — solo metadatos, NO modifica pixel data:
+  JPEG: piexif.insert() reemplaza solo el bloque EXIF sin recomprimir.
+  HEIC: exiftool modifica solo los metadatos en el contenedor HEIF sin re-encodificar.
+
+IPHOTO_ROTATED — corrige pixel data deformado por iPhoto 9:
+  iPhoto 9 re-escaló los píxeles (aplastó ancho, estiró alto) en vez de rotarlos.
+  Fix: resize(h, w) para deshacer la deformación + rotar 90° CCW.
+  Lossy (recomprime JPEG a quality=95) pero es la única forma de corregir los píxeles.
 
 Pipeline de seguridad:
   1. hash SHA-256 del original
   2. copia a backup_dir
   3. verificar hash del backup
   4. [dry-run: parar aquí]
-  5. fix según formato (piexif para JPEG, exiftool para HEIC)
+  5. fix según tipo (EXIF swap o resize+rotate)
   6. verificar que PIL puede abrir el resultado
   7. si falla cualquier paso: restaurar backup automáticamente
 """
@@ -82,6 +88,36 @@ def _fix_jpeg(path: Path, exif_dict: dict, w: int, h: int) -> None:
     piexif.insert(new_exif_bytes, str(path))
 
 
+def _fix_iphoto_rotated(path: Path) -> None:
+    """Corrige fotos deformadas por iPhoto 9: resize + rotar 90° CCW.
+
+    iPhoto 9 re-escaló los píxeles (ancho↔alto) sin rotarlos.
+    Para revertirlo: resize a (h, w) deshace la deformación,
+    luego rotar 90° CCW pone la orientación correcta.
+    """
+    with Image.open(path) as img:
+        w, h = img.size
+        exif_raw = img.info.get("exif", b"")
+        # 1. Resize: intercambiar dimensiones para deshacer deformación
+        fixed = img.resize((h, w), Image.LANCZOS)
+        # 2. Rotar 90° CCW para orientación correcta
+        fixed = fixed.transpose(Image.ROTATE_90)
+
+    # Preservar EXIF original (dimensiones finales = w x h, igual que original)
+    if exif_raw:
+        try:
+            exif_dict = piexif.load(exif_raw)
+            exif_dict["Exif"][piexif.ExifIFD.PixelXDimension] = w
+            exif_dict["Exif"][piexif.ExifIFD.PixelYDimension] = h
+            new_exif = piexif.dump(exif_dict)
+            fixed.save(str(path), quality=95, exif=new_exif)
+        except Exception:
+            fixed.save(str(path), quality=95)
+    else:
+        fixed.save(str(path), quality=95)
+    fixed.close()
+
+
 def _fix_heic(path: Path, w: int, h: int) -> None:
     """Intercambia dimensiones EXIF en HEIC usando exiftool (sin re-encodificar).
 
@@ -121,37 +157,39 @@ def fix_asset(
 
     path = Path(scan_result.path)
     is_heic = path.suffix.lower() in _HEIC_EXTENSIONS
+    is_iphoto = scan_result.status == Status.IPHOTO_ROTATED
 
-    # Leer EXIF
-    try:
-        with Image.open(path) as img:
-            exif_raw = img.info.get("exif", b"")
-    except Exception as e:
-        result.fix_status = FixStatus.ERROR
-        result.error = str(e)
-        return result
+    if not is_iphoto:
+        # SWAP_CONFIRMED necesita EXIF con dimensiones
+        try:
+            with Image.open(path) as img:
+                exif_raw = img.info.get("exif", b"")
+        except Exception as e:
+            result.fix_status = FixStatus.ERROR
+            result.error = str(e)
+            return result
 
-    if not exif_raw:
-        result.fix_status = FixStatus.NO_EXIF_DIMS
-        return result
+        if not exif_raw:
+            result.fix_status = FixStatus.NO_EXIF_DIMS
+            return result
 
-    try:
-        exif_dict = piexif.load(exif_raw)
-        w = exif_dict["Exif"].get(piexif.ExifIFD.PixelXDimension)
-        h = exif_dict["Exif"].get(piexif.ExifIFD.PixelYDimension)
-    except Exception as e:
-        result.fix_status = FixStatus.ERROR
-        result.error = f"piexif.load: {e}"
-        return result
+        try:
+            exif_dict = piexif.load(exif_raw)
+            w = exif_dict["Exif"].get(piexif.ExifIFD.PixelXDimension)
+            h = exif_dict["Exif"].get(piexif.ExifIFD.PixelYDimension)
+        except Exception as e:
+            result.fix_status = FixStatus.ERROR
+            result.error = f"piexif.load: {e}"
+            return result
 
-    if not w or not h:
-        result.fix_status = FixStatus.NO_EXIF_DIMS
-        return result
+        if not w or not h:
+            result.fix_status = FixStatus.NO_EXIF_DIMS
+            return result
 
-    if is_heic and not _exiftool_available():
-        result.fix_status = FixStatus.HEIC_NO_EXIFTOOL
-        result.error = "Instala exiftool: brew install exiftool"
-        return result
+        if is_heic and not _exiftool_available():
+            result.fix_status = FixStatus.HEIC_NO_EXIFTOOL
+            result.error = "Instala exiftool: brew install exiftool"
+            return result
 
     if dry_run:
         result.fix_status = FixStatus.DRY_RUN
@@ -175,9 +213,11 @@ def fix_asset(
         result.error = str(e)
         return result
 
-    # Fix según formato
+    # Fix según tipo
     try:
-        if is_heic:
+        if is_iphoto:
+            _fix_iphoto_rotated(path)
+        elif is_heic:
             _fix_heic(path, w, h)
         else:
             _fix_jpeg(path, exif_dict, w, h)
