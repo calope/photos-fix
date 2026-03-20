@@ -1,15 +1,17 @@
 """
 Corrección de metadatos EXIF: intercambia PixelXDimension ↔ PixelYDimension.
 
-NO modifica el pixel data. Usa piexif.insert() para reemplazar solo el bloque
-EXIF del archivo JPEG, sin recomprimir ni degradar la imagen.
+NO modifica el pixel data.
+
+JPEG: piexif.insert() reemplaza solo el bloque EXIF sin recomprimir.
+HEIC: exiftool modifica solo los metadatos en el contenedor HEIF sin re-encodificar.
 
 Pipeline de seguridad:
   1. hash SHA-256 del original
   2. copia a backup_dir
   3. verificar hash del backup
   4. [dry-run: parar aquí]
-  5. piexif.insert() — reescribe solo el bloque EXIF
+  5. fix según formato (piexif para JPEG, exiftool para HEIC)
   6. verificar que PIL puede abrir el resultado
   7. si falla cualquier paso: restaurar backup automáticamente
 """
@@ -18,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import shutil
+import subprocess
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -27,12 +30,15 @@ from PIL import Image
 
 from photos_fix.scanner import ScanResult, Status
 
+_HEIC_EXTENSIONS = {".heic", ".heif", ".heics", ".heifs"}
+
 
 class FixStatus(str, Enum):
     FIXED = "FIXED"
     DRY_RUN = "DRY_RUN"
     SKIPPED = "SKIPPED"  # no era SWAP_CONFIRMED
     NO_EXIF_DIMS = "NO_EXIF_DIMS"  # sin PixelXDimension en EXIF
+    HEIC_NO_EXIFTOOL = "HEIC_NO_EXIFTOOL"  # exiftool no instalado
     BACKUP_FAILED = "BACKUP_FAILED"
     VERIFY_FAILED = "VERIFY_FAILED"
     RESTORED = "RESTORED"  # falló el fix, se restauró el backup
@@ -56,6 +62,41 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _exiftool_available() -> bool:
+    try:
+        subprocess.run(
+            ["exiftool", "-ver"],
+            capture_output=True,
+            check=True,
+        )
+        return True
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return False
+
+
+def _fix_jpeg(path: Path, exif_dict: dict, w: int, h: int) -> None:
+    """Intercambia dimensiones EXIF en JPEG usando piexif.insert() (sin recomprimir)."""
+    exif_dict["Exif"][piexif.ExifIFD.PixelXDimension] = h
+    exif_dict["Exif"][piexif.ExifIFD.PixelYDimension] = w
+    new_exif_bytes = piexif.dump(exif_dict)
+    piexif.insert(new_exif_bytes, str(path))
+
+
+def _fix_heic(path: Path, w: int, h: int) -> None:
+    """Intercambia dimensiones EXIF en HEIC usando exiftool (sin re-encodificar)."""
+    subprocess.run(
+        [
+            "exiftool",
+            f"-PixelXDimension={h}",
+            f"-PixelYDimension={w}",
+            "-overwrite_original",
+            str(path),
+        ],
+        capture_output=True,
+        check=True,
+    )
+
+
 def fix_asset(
     scan_result: ScanResult,
     backup_dir: Path,
@@ -72,6 +113,7 @@ def fix_asset(
         return result
 
     path = Path(scan_result.path)
+    is_heic = path.suffix.lower() in _HEIC_EXTENSIONS
 
     # Leer EXIF
     try:
@@ -99,6 +141,11 @@ def fix_asset(
         result.fix_status = FixStatus.NO_EXIF_DIMS
         return result
 
+    if is_heic and not _exiftool_available():
+        result.fix_status = FixStatus.HEIC_NO_EXIFTOOL
+        result.error = "Instala exiftool: brew install exiftool"
+        return result
+
     if dry_run:
         result.fix_status = FixStatus.DRY_RUN
         return result
@@ -121,15 +168,13 @@ def fix_asset(
         result.error = str(e)
         return result
 
-    # Fix: intercambiar PixelXDimension ↔ PixelYDimension
+    # Fix según formato
     try:
-        exif_dict["Exif"][piexif.ExifIFD.PixelXDimension] = h
-        exif_dict["Exif"][piexif.ExifIFD.PixelYDimension] = w
-
-        new_exif_bytes = piexif.dump(exif_dict)
-        piexif.insert(new_exif_bytes, str(path))
+        if is_heic:
+            _fix_heic(path, w, h)
+        else:
+            _fix_jpeg(path, exif_dict, w, h)
     except Exception as e:
-        # Restaurar backup
         try:
             shutil.copy2(backup_path, path)
             result.fix_status = FixStatus.RESTORED
@@ -143,7 +188,6 @@ def fix_asset(
         with Image.open(path) as img:
             img.verify()
     except Exception as e:
-        # Restaurar backup
         try:
             shutil.copy2(backup_path, path)
             result.fix_status = FixStatus.RESTORED
