@@ -28,6 +28,7 @@ from photos_fix.export import export_batch
 from photos_fix.fixer import FixStatus, fix_batch
 from photos_fix.health import run_health_check
 from photos_fix.icloud import get_not_uploaded
+from photos_fix.log import configure_logging, get_logger
 from photos_fix.report import (
     write_export_report,
     write_fix_report,
@@ -36,6 +37,8 @@ from photos_fix.report import (
     write_scan_report,
 )
 from photos_fix.scanner import ScanResult, Status, scan_library
+
+log = get_logger(__name__)
 
 
 def _progress_bar(current: int, total: int, width: int = 40) -> str:
@@ -66,9 +69,10 @@ def cmd_scan(args: argparse.Namespace) -> None:
             w, h = args.filter_size.lower().split("x")
             filter_size = (int(w), int(h))
         except ValueError:
-            print(
-                "ERROR: --filter-size debe tener formato WxH (ej: 3264x2448)",
-                file=sys.stderr,
+            log.error(
+                "--filter-size debe tener formato WxH",
+                ejemplo="3264x2448",
+                valor=args.filter_size,
             )
             sys.exit(1)
 
@@ -77,9 +81,9 @@ def cmd_scan(args: argparse.Namespace) -> None:
     assets = get_all_assets(conn, filter_size=filter_size)
     conn.close()
 
-    print(f"Escaneando {len(assets)} fotos...")
+    log.info("Escaneando biblioteca", total=len(assets))
     if filter_size:
-        print(f"Filtro activo: {filter_size[0]}x{filter_size[1]}")
+        log.info("Filtro activo", width=filter_size[0], height=filter_size[1])
 
     def on_progress(current, total, result):
         print(_progress_bar(current, total), end="", flush=True)
@@ -93,13 +97,12 @@ def cmd_scan(args: argparse.Namespace) -> None:
         print(f"  {status}: {count}")
 
     if not results:
-        print("No se encontraron fotos.")
+        log.warning("No se encontraron fotos")
         return
 
     paths = write_scan_report(results, output_dir, fmt=args.format)
-    print("\nInforme guardado en:")
     for p in paths:
-        print(f"  {p}")
+        log.info("Informe guardado", path=str(p))
 
 
 # ---------------------------------------------------------------------------
@@ -120,27 +123,27 @@ def cmd_fix(args: argparse.Namespace) -> None:
             else []
         )
         if not csvs:
-            print(
-                "ERROR: No se encontró informe de scan. Ejecuta primero: photos-fix scan",
-                file=sys.stderr,
+            log.error(
+                "No se encontró informe de scan",
+                hint="Ejecuta primero: photos-fix scan",
             )
             sys.exit(1)
         input_path = csvs[0]
-        print(f"Usando informe: {input_path}")
+        log.info("Usando informe", path=str(input_path))
 
     scan_results = _load_scan_csv(input_path)
     candidates = [r for r in scan_results if r.status == Status.SWAP_CONFIRMED]
 
     if not candidates:
-        print("No hay fotos con SWAP_CONFIRMED. Nada que corregir.")
+        log.warning("No hay fotos con SWAP_CONFIRMED — nada que corregir")
         return
 
-    print(f"Fotos a corregir: {len(candidates)}")
+    log.info("Fotos a corregir", total=len(candidates))
 
     if dry_run:
-        print("MODO DRY-RUN: no se modificará ningún archivo.\n")
+        log.info("Modo dry-run — no se modificará ningún archivo")
     else:
-        print(f"Backup en: {backup_dir}")
+        log.info("Backup en", dir=str(backup_dir))
         confirm = input('\nEscribe "CONFIRMAR" para continuar: ')
         if confirm.strip() != "CONFIRMAR":
             print("Cancelado.")
@@ -176,9 +179,8 @@ def cmd_fix(args: argparse.Namespace) -> None:
         Path(args.output) if hasattr(args, "output") else Path("reports"),
         fmt="both",
     )
-    print("\nInforme guardado en:")
     for p in paths:
-        print(f"  {p}")
+        log.info("Informe guardado", path=str(p))
 
 
 # ---------------------------------------------------------------------------
@@ -196,15 +198,14 @@ def cmd_icloud(args: argparse.Namespace) -> None:
     conn.close()
 
     results = get_not_uploaded(rows, originals_dir)
-    print(f"Fotos no subidas a iCloud: {len(results)}")
+    log.info("Fotos no subidas a iCloud", total=len(results))
 
     if not results:
         return
 
     paths = write_icloud_report(results, output_dir, fmt=args.format)
-    print("\nInforme guardado en:")
     for p in paths:
-        print(f"  {p}")
+        log.info("Informe guardado", path=str(p))
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +223,7 @@ def cmd_health(args: argparse.Namespace) -> None:
     icloud_rows = get_icloud_status(conn)
     conn.close()
 
-    print(f"Analizando {len(assets)} fotos (esto puede tardar 10-20 min)...")
+    log.info("Analizando biblioteca", total=len(assets), aviso="puede tardar 10-20 min")
 
     def on_progress(current, total, result):
         print(_progress_bar(current, total), end="", flush=True)
@@ -257,14 +258,13 @@ def cmd_health(args: argparse.Namespace) -> None:
     print("────────────────────────────────────────────────────────────")
 
     if not report.has_issues():
-        print("\n✓ Sin problemas detectados.")
+        log.info("Sin problemas detectados")
     else:
-        print("\nSe encontraron problemas. Revisa los informes generados.")
+        log.warning("Se encontraron problemas — revisa los informes generados")
 
     paths = write_health_report(report, output_dir, fmt=args.format)
-    print("\nInformes guardados en:")
     for p in paths:
-        print(f"  {p}")
+        log.info("Informe guardado", path=str(p))
 
 
 # ---------------------------------------------------------------------------
@@ -288,9 +288,12 @@ def cmd_export(args: argparse.Namespace) -> None:
         icloud_rows = get_icloud_status(conn)
         icloud_results = get_not_uploaded(icloud_rows, originals_dir)
         not_uploaded_uuids = {r.uuid for r in icloud_results}
-        print(f"Exportando solo fotos no subidas a iCloud: {len(not_uploaded_uuids)}")
+        log.info(
+            "Exportando solo fotos no subidas a iCloud",
+            total=len(not_uploaded_uuids),
+        )
     else:
-        print(f"Exportando {len(assets)} fotos a: {output_dir}")
+        log.info("Exportando fotos", total=len(assets), destino=str(output_dir))
 
     conn.close()
 
@@ -325,9 +328,8 @@ def cmd_export(args: argparse.Namespace) -> None:
             print(f"  {r.filename}: {r.error}")
 
     paths = write_export_report(results, report_dir, fmt="both")
-    print("\nInforme guardado en:")
     for p in paths:
-        print(f"  {p}")
+        log.info("Informe guardado", path=str(p))
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +369,17 @@ def main() -> None:
         description="Diagnóstico y corrección de metadatos EXIF en macOS Photos",
     )
     parser.add_argument("--version", action="version", version="photos-fix 0.1.0")
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Incluir módulo, función y línea en los logs",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json_logs",
+        help="Logs en formato JSON (para pipes / CI)",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     # --- scan ---
@@ -443,6 +456,7 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+    configure_logging(verbose=args.verbose, enable_json=args.json_logs)
 
     if args.command == "scan":
         cmd_scan(args)

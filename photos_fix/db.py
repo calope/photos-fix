@@ -11,23 +11,24 @@ import sys
 from pathlib import Path
 
 from photos_fix import PHOTOS_DB
+from photos_fix.log import get_logger
+
+log = get_logger(__name__)
 
 
 def check_photos_running() -> None:
     result = subprocess.run(["pgrep", "-x", "Photos"], capture_output=True)
     if result.returncode == 0:
-        print(
-            "ERROR: Photos está abierto. Ciérralo antes de ejecutar.", file=sys.stderr
-        )
+        log.error("Photos está abierto — ciérralo antes de ejecutar")
         sys.exit(1)
 
 
 def open_db(db_path: Path = PHOTOS_DB) -> sqlite3.Connection:
     if not db_path.exists():
-        print(f"ERROR: No se encuentra la base de datos: {db_path}", file=sys.stderr)
-        print(
-            "Asegúrate de que la biblioteca de Fotos está en ~/Pictures/",
-            file=sys.stderr,
+        log.error(
+            "No se encuentra la base de datos",
+            path=str(db_path),
+            hint="Asegúrate de que la biblioteca de Fotos está en ~/Pictures/",
         )
         sys.exit(1)
 
@@ -37,11 +38,9 @@ def open_db(db_path: Path = PHOTOS_DB) -> sqlite3.Connection:
         return conn
     except sqlite3.OperationalError as e:
         if "authorization" in str(e).lower() or "unable to open" in str(e).lower():
-            print("ERROR: Sin acceso a la base de datos de Fotos.", file=sys.stderr)
-            print("Concede Full Disk Access a Terminal.app:", file=sys.stderr)
-            print(
-                "  Ajustes del Sistema → Privacidad → Acceso completo al disco",
-                file=sys.stderr,
+            log.error(
+                "Sin acceso a la base de datos de Fotos",
+                hint="Ajustes del Sistema → Privacidad → Acceso completo al disco",
             )
             sys.exit(1)
         raise
