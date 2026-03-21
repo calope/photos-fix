@@ -89,17 +89,27 @@ def _fix_jpeg(path: Path, exif_dict: dict, w: int, h: int) -> None:
 
 
 def _restore_metadata(path: Path, backup_path: Path) -> None:
-    """Copia toda la metadata del backup al archivo modificado.
+    """Copia toda la metadata del backup y actualiza dimensiones al archivo modificado.
 
     Usa exiftool para copiar JFIF, ICC, fechas, etc. del original.
+    Además actualiza ExifImageWidth/Height con las dimensiones reales del archivo
+    corregido para que los metadatos sean coherentes con los píxeles.
     Imprescindible después de cualquier PIL save() que pierde metadata.
     """
+    # Leer dimensiones actuales del archivo corregido
+    with Image.open(path) as img:
+        w, h = img.size
+
     proc = subprocess.run(
         [
             "exiftool",
             "-tagsfromfile",
             str(backup_path),
             "-all:all",
+            f"-ExifImageWidth={w}",
+            f"-ExifImageHeight={h}",
+            f"-ImageWidth={w}",
+            f"-ImageHeight={h}",
             "-overwrite_original",
             str(path),
         ],
