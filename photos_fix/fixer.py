@@ -88,6 +88,28 @@ def _fix_jpeg(path: Path, exif_dict: dict, w: int, h: int) -> None:
     piexif.insert(new_exif_bytes, str(path))
 
 
+def _restore_metadata(path: Path, backup_path: Path) -> None:
+    """Copia toda la metadata del backup al archivo modificado.
+
+    Usa exiftool para copiar JFIF, ICC, fechas, etc. del original.
+    Imprescindible después de cualquier PIL save() que pierde metadata.
+    """
+    proc = subprocess.run(
+        [
+            "exiftool",
+            "-tagsfromfile",
+            str(backup_path),
+            "-all:all",
+            "-overwrite_original",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    # Si falla, no es crítico — la foto está visualmente correcta
+    return proc.returncode == 0
+
+
 def _fix_rotated(path: Path, rotation: int) -> None:
     """Rota la foto según lo detectado por face detection.
 
@@ -294,6 +316,11 @@ def fix_asset(
             result.fix_status = FixStatus.ERROR
         result.error = str(e)
         return result
+
+    # Restaurar metadata del backup después de fixes que usan PIL save()
+    # (PIL pierde JFIF, ICC, fechas, etc. al guardar)
+    if is_rotated or is_deformed or is_iphoto:
+        _restore_metadata(path, backup_path)
 
     # Verificar que el archivo sigue siendo legible
     try:
