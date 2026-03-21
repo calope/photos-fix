@@ -1,10 +1,14 @@
 # photos-fix
 
-Diagnóstico y corrección de metadatos EXIF en bibliotecas de macOS Photos.
+Diagnóstico y corrección de metadatos EXIF y deformaciones en bibliotecas de macOS Photos.
 
-Detecta fotos cuyas dimensiones EXIF (`PixelXDimension`/`PixelYDimension`) tienen el
-ancho y alto intercambiados y las corrige **sin tocar el pixel data** — solo
-reescribe el bloque EXIF del archivo JPEG. También diagnostica fotos no subidas a iCloud.
+Detecta y corrige múltiples problemas:
+- **SWAP_CONFIRMED** — dimensiones EXIF intercambiadas (solo reescribe EXIF, sin tocar píxeles)
+- **IPHOTO_ROTATED** — fotos deformadas por iPhoto 9 con EXIF presente (doble paso resize+rotate)
+- **DEFORMED** — fotos deformadas sin EXIF, detectadas por análisis de gradientes con OpenCV
+- **ROTATED** — fotos con orientación incorrecta, detectadas por face detection con OpenCV
+- **NOT_UPLOADED** — diagnóstico de fotos no subidas a iCloud
+- **ORPHANS** — archivos en disco sin entrada en la DB de Photos
 
 ---
 
@@ -16,10 +20,12 @@ reescribe el bloque EXIF del archivo JPEG. También diagnostica fotos no subidas
 - [Configuración inicial](#configuración-inicial)
 - [Uso](#uso)
   - [scan — detectar problemas](#scan--detectar-problemas)
-  - [fix — corregir metadatos](#fix--corregir-metadatos)
+  - [fix — corregir metadatos y deformaciones](#fix--corregir-metadatos-y-deformaciones)
   - [icloud — diagnóstico de subida](#icloud--diagnóstico-de-subida)
   - [health — diagnóstico integral](#health--diagnóstico-integral)
   - [export — exportar originales](#export--exportar-originales)
+  - [album — crear álbum en Photos](#album--crear-álbum-en-photos)
+  - [quarantine — mover orphans a cuarentena](#quarantine--mover-orphans-a-cuarentena)
 - [Referencia de estados](#referencia-de-estados)
 - [Referencia de columnas CSV](#referencia-de-columnas-csv)
 - [Flujo completo recomendado](#flujo-completo-recomendado)
@@ -271,55 +277,42 @@ Informe guardado en:
 
 ---
 
-### fix — corregir metadatos
+### fix — corregir metadatos y deformaciones
 
-Corrige las fotos con estado `SWAP_CONFIRMED` intercambiando `PixelXDimension` ↔
-`PixelYDimension` en el EXIF. **El pixel data no se toca.**
+Corrige fotos según su estado detectado:
 
-#### Paso 1 — Dry-run obligatorio (simula sin modificar)
+| Estado | Corrección |
+|--------|------------|
+| `SWAP_CONFIRMED` | Intercambia `PixelXDimension` ↔ `PixelYDimension` en EXIF (sin tocar píxeles) |
+| `IPHOTO_ROTATED` | Doble paso resize+rotate para fotos deformadas por iPhoto 9 con EXIF |
+| `DEFORMED` | Resize simple `(h, w)` para fotos deformadas sin EXIF |
+| `ROTATED` | Rota la foto según lo detectado por face detection (90°, 180° o 270°) |
+
+#### Paso 1 — Dry-run (simula sin modificar)
 
 ```bash
 uv run photos-fix fix --dry-run
 ```
 
-Muestra cuántas fotos se corregirían y verifica que los backups serían viables,
-sin modificar ningún archivo.
-
 #### Paso 2 — Corrección real
 
 ```bash
-uv run photos-fix fix --backup-dir ./backups/
+# Usar el CSV del último health scan
+uv run photos-fix fix --input reports/health_scan_XXXXXXXX.csv --backup-dir ./backups/
 ```
 
 El script:
 1. Muestra cuántas fotos va a modificar
 2. Pide escribir `CONFIRMAR` para continuar
-3. Para cada foto: hace backup → corrige EXIF → verifica integridad
+3. Para cada foto: hace backup → aplica corrección según tipo → verifica integridad
 4. Si algo falla, restaura el backup automáticamente
-
-```
-Fotos a corregir: 127
-Backup en: backups/
-
-Escribe "CONFIRMAR" para continuar: CONFIRMAR
-
-[████████████████████████████████████████] 127/127
-
-Resultados:
-  FIXED: 125
-  NO_EXIF_DIMS: 2
-
-Informe guardado en:
-  reports/fix_20240315_143012.csv
-  reports/fix_20240315_143012.json
-```
 
 **Opciones:**
 
 | Opción | Default | Descripción |
 |--------|---------|-------------|
 | `--library PATH` | `~/Pictures/Photos Library.photoslibrary` | Ruta a la biblioteca |
-| `--input FILE` | CSV más reciente en `reports/` | CSV generado por `scan` |
+| `--input FILE` | CSV más reciente en `reports/` | CSV generado por `scan` o `health` |
 | `--backup-dir DIR` | `backups/` | Directorio donde guardar los originales antes de modificar |
 | `--output DIR` | `reports/` | Directorio donde guardar el informe del fix |
 | `--dry-run` | — | Simula sin modificar nada |
@@ -359,41 +352,33 @@ Ejecuta todas las comprobaciones en un solo comando y genera un resumen completo
 **Solo lectura — no modifica ningún archivo.**
 
 ```bash
+# Diagnóstico estándar (deformación + EXIF + iCloud)
 uv run photos-fix health
+
+# Con detección de rotación por face detection (lento)
+uv run photos-fix health --detect-rotation
 ```
 
 Salida de ejemplo:
 
 ```
-Analizando 51432 fotos (esto puede tardar 10-20 min)...
-[████████████████████████████████████████] 51432/51432
-
 ── Resumen de salud de la biblioteca ──────────────────────
-  Total fotos escaneadas : 51432
-  OK                     : 50891
+  Total fotos escaneadas : 73500
+  OK                     : 33055
 
-  ⚠  SWAP_CONFIRMED      : 127  ← corregibles con 'fix'
-  ⚠  SUSPECT             : 14
-  ⚠  LOCAL_MISSING       : 312  ← solo en iCloud
-  ⚠  UNREADABLE          : 40
-  ⚠  ZERO_BYTE           : 3    ← archivos vacíos
-  ⚠  NO_EXIF             : 48
-  ⚠  NOT_UPLOADED        : 23   ← no subidas a iCloud
-  ⚠  ORPHANS             : 7    ← archivos sin entrada en DB
+  ⚠  SWAP_CONFIRMED      : 0    ← corregibles con 'fix'
+  ⚠  IPHOTO_ROTATED      : 433  ← iPhoto 9 rotó píxeles
+  ⚠  DEFORMED            : 156  ← deformación por gradient ratio
+  ⚠  ROTATED             : 12   ← rotación incorrecta (face detection)
+  ⚠  SUSPECT             : 52
+  ⚠  LOCAL_MISSING       : 36406 ← solo en iCloud
+  ⚠  UNREADABLE          : 1
+  ⚠  ZERO_BYTE           : 0    ← archivos vacíos
+  ⚠  NO_EXIF             : 1992
+  ⚠  NOT_UPLOADED        : 40751 ← no subidas a iCloud
+  ⚠  ORPHANS             : 233  ← archivos sin entrada en DB
 ────────────────────────────────────────────────────────────
-
-Se encontraron problemas. Revisa los informes generados.
-
-Informes guardados en:
-  reports/health_scan_20240315_150000.csv
-  reports/health_orphans_20240315_150000.csv
-  reports/health_zero_bytes_20240315_150000.csv
-  reports/health_icloud_20240315_150000.csv
-  reports/health_20240315_150000.json
 ```
-
-El comando `health` genera CSV separados por tipo de problema para facilitar
-la revisión en Numbers o Excel.
 
 **Opciones:**
 
@@ -402,6 +387,7 @@ la revisión en Numbers o Excel.
 | `--library PATH` | `~/Pictures/Photos Library.photoslibrary` | Ruta a la biblioteca |
 | `--output DIR` | `reports/` | Directorio donde guardar los informes |
 | `--format` | `both` | Formato: `csv`, `json` o `both` |
+| `--detect-rotation` | desactivado | Activar detección de rotación por face detection (lento, ~4x más) |
 
 ---
 
@@ -452,13 +438,70 @@ Resultados:
 
 ---
 
+### album — crear álbum en Photos
+
+Crea un álbum en Photos.app con fotos filtradas por estado. Útil para revisar
+visualmente las fotos detectadas por el scanner.
+
+```bash
+# Álbum con fotos corregidas
+uv run photos-fix album --filter FIXED --name "Corregidas" --run
+
+# Álbum con fotos deformadas para revisar
+uv run photos-fix album --filter DEFORMED --name "Deformadas" --run
+
+# Múltiples estados
+uv run photos-fix album --filter "DEFORMED,ROTATED" --name "Revisión" --run
+
+# Usar un CSV específico
+uv run photos-fix album --input reports/health_scan_XXXXXXXX.csv --filter SUSPECT --name "Suspects" --run
+```
+
+**Opciones:**
+
+| Opción | Default | Descripción |
+|--------|---------|-------------|
+| `--input FILE` | CSV más reciente en `reports/` | CSV de fix o health |
+| `--filter` | `FIXED` | Estados a incluir, separados por coma |
+| `--name` | `Fotos corregidas EXIF` | Nombre del álbum |
+| `--output FILE` | `reports/create_album.applescript` | Ruta del script generado |
+| `--run` | — | Ejecutar inmediatamente en Photos.app |
+
+---
+
+### quarantine — mover orphans a cuarentena
+
+Mueve archivos huérfanos (en disco sin entrada en la DB) a una carpeta
+de cuarentena. Preserva la estructura de directorios.
+
+```bash
+# Ver qué se movería (sin mover nada)
+uv run photos-fix quarantine --dry-run
+
+# Mover a cuarentena
+uv run photos-fix quarantine --dest ./quarantine/
+```
+
+**Opciones:**
+
+| Opción | Default | Descripción |
+|--------|---------|-------------|
+| `--input FILE` | CSV de orphans más reciente en `reports/` | CSV generado por health |
+| `--dest DIR` | `quarantine/` | Carpeta destino |
+| `--dry-run` | — | Solo mostrar qué se movería |
+
+---
+
 ## Referencia de estados
 
 ### Estados del scan
 
 | Estado | Descripción | ¿Se corrige? |
 |--------|-------------|--------------|
-| `SWAP_CONFIRMED` | Dimensiones EXIF exactamente intercambiadas respecto al pixel data | ✅ Sí |
+| `SWAP_CONFIRMED` | Dimensiones EXIF exactamente intercambiadas respecto al pixel data | ✅ Swap EXIF |
+| `IPHOTO_ROTATED` | iPhoto 9 deformó los píxeles (Software=iPhoto 9.*, Orientation=1) | ✅ Doble paso resize+rotate |
+| `DEFORMED` | Deformación detectada por gradient ratio (sin EXIF header, portrait) | ✅ Resize simple |
+| `ROTATED` | Rotación incorrecta detectada por face detection (requiere `--detect-rotation`) | ✅ Rotación PIL |
 | `SUSPECT` | Orientación opuesta entre pixel data y DB, sin EXIF de dimensiones | ⚠️ Revisar manualmente |
 | `OK` | Sin problemas detectados | — |
 | `NO_EXIF` | Sin bloque EXIF (fotos muy antiguas o procesadas con herramientas que lo eliminan) | — |
@@ -471,7 +514,7 @@ Resultados:
 |--------|-------------|
 | `FIXED` | Corrección aplicada correctamente |
 | `DRY_RUN` | Simulación: se habría corregido |
-| `SKIPPED` | No era `SWAP_CONFIRMED`, se omitió |
+| `SKIPPED` | No tenía estado corregible, se omitió |
 | `NO_EXIF_DIMS` | No tiene `PixelXDimension`/`PixelYDimension` en EXIF |
 | `BACKUP_FAILED` | Error al crear el backup (no se modificó el original) |
 | `RESTORED` | El fix falló, se restauró el backup automáticamente |
@@ -539,30 +582,46 @@ git clone https://github.com/calope/photos-fix
 cd photos-fix
 uv sync
 
-# 2. Análisis completo (solo lectura, ~10-20 min)
-uv run photos-fix scan
+# 2. Diagnóstico integral (solo lectura, ~10-20 min)
+uv run photos-fix health
 
-# 2b. Si recuerdas el tamaño de las fotos afectadas (más rápido)
-uv run photos-fix scan --filter-size 3264x2448
+# 3. Revisar informes
+open reports/
 
-# 3. Diagnóstico de subidas a iCloud
-uv run photos-fix icloud
+# 4. Crear álbum para revisar visualmente las detectadas
+uv run photos-fix album --filter "SWAP_CONFIRMED,IPHOTO_ROTATED,DEFORMED" \
+    --name "Revisión" --run
 
-# 4. Revisar los informes antes de tocar nada
-open reports/   # abre en Finder
-# Abrir el CSV en Numbers y revisar las SWAP_CONFIRMED
-
-# 5. Dry-run: ver qué se modificaría sin tocar nada
-uv run photos-fix fix --dry-run
+# 5. Probar con muestras antes de aplicar masivamente
+uv run photos-fix fix --input reports/health_scan_XXXXXXXX.csv \
+    --backup-dir ./backups/ --dry-run
 
 # 6. Corrección real (pide escribir CONFIRMAR)
-uv run photos-fix fix --backup-dir ./backups/
+uv run photos-fix fix --input reports/health_scan_XXXXXXXX.csv \
+    --backup-dir ./backups/
 
 # 7. Verificar resultado
-uv run photos-fix scan --filter-size 3264x2448
-# SWAP_CONFIRMED debería ser 0
+uv run photos-fix health
+# SWAP_CONFIRMED, IPHOTO_ROTATED, DEFORMED deberían ser 0
 
-# 8. Reabrir Photos y verificar visualmente
+# 8. Detección de rotación (opcional, lento)
+uv run photos-fix health --detect-rotation
+uv run photos-fix album --filter ROTATED --name "Rotadas" --run
+# Revisar álbum, luego:
+uv run photos-fix fix --input reports/health_scan_XXXXXXXX.csv \
+    --backup-dir ./backups_rotated/
+
+# 9. Mover orphans a cuarentena
+uv run photos-fix quarantine --dry-run
+uv run photos-fix quarantine
+
+# 10. Exportar fotos no subidas a iCloud (para importar en otro Mac)
+uv run photos-fix export --only-not-uploaded --output ~/Desktop/para-otro-mac/
+
+# 11. Reparar biblioteca Photos (regenerar previsualizaciones)
+#     Cerrar Photos → abrir con Option+Command → Reparar
+
+# 12. Reabrir Photos y verificar visualmente
 open -a Photos
 ```
 
@@ -688,9 +747,11 @@ photos-fix/
 │   ├── __init__.py       # constantes de ruta, __version__
 │   ├── cli.py            # interfaz de línea de comandos (argparse)
 │   ├── db.py             # acceso SQLite read-only a Photos.sqlite
-│   ├── scanner.py        # detección de dimensiones EXIF incorrectas
-│   ├── fixer.py          # corrección EXIF con backup y verificación
+│   ├── scanner.py        # detección: EXIF swap, iPhoto rotation, deformación (OpenCV), rotación (face detection)
+│   ├── fixer.py          # corrección: EXIF swap, resize, rotate, con backup y verificación
+│   ├── health.py         # diagnóstico integral de la biblioteca
 │   ├── icloud.py         # diagnóstico de fotos no subidas
+│   ├── log.py            # logging con structlog y colores
 │   └── report.py         # generación de informes CSV y JSON
 ├── tests/
 │   ├── test_scanner.py   # tests con imágenes JPEG generadas en memoria
