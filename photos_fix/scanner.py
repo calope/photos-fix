@@ -1,10 +1,12 @@
 """
-Detección de fotos con dimensiones EXIF incorrectas (ancho y alto intercambiados).
+Detección de fotos con dimensiones EXIF incorrectas y deformaciones por iPhoto.
 
 Lógica:
   - PIL lee las dimensiones reales del pixel data (fuente de verdad)
   - piexif lee PixelXDimension / PixelYDimension del EXIF
   - Si w_real == h_exif AND h_real == w_exif → SWAP_CONFIRMED
+  - Si Software=iPhoto 9 + Orientation=1 → IPHOTO_ROTATED
+  - Si no hay EXIF header + portrait + gradient ratio alto → DEFORMED
   - Si no hay EXIF de dimensiones, compara con ZASSET.ZWIDTH / ZASSET.ZHEIGHT
 """
 
@@ -15,18 +17,30 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
+import numpy as np
 import piexif
 from PIL import Image, UnidentifiedImageError
 from pillow_heif import register_heif_opener
+
+try:
+    import cv2
+
+    _HAS_CV2 = True
+except ImportError:
+    _HAS_CV2 = False
 
 register_heif_opener()  # habilita PIL.Image.open() para HEIC/HEIF
 
 from photos_fix import PHOTOS_ORIGINALS
 
 
+GRADIENT_THRESHOLD = 1.4  # ratio H/V por encima del cual se considera deformada (F1=0.950)
+
+
 class Status(str, Enum):
     SWAP_CONFIRMED = "SWAP_CONFIRMED"  # dimensiones EXIF exactamente intercambiadas
     IPHOTO_ROTATED = "IPHOTO_ROTATED"  # iPhoto 9 rotó píxeles y dejó Orientation=1
+    DEFORMED = "DEFORMED"  # deformación detectada por gradient ratio (sin EXIF)
     SUSPECT = "SUSPECT"  # orientación opuesta entre PIL y DB, sin EXIF dims
     OK = "OK"
     LOCAL_MISSING = "LOCAL_MISSING"  # archivo no disponible localmente (en iCloud)
@@ -47,6 +61,32 @@ class ScanResult:
     w_db: int | None = None
     h_db: int | None = None
     error: str | None = None
+
+
+def _gradient_ratio(path: Path) -> float | None:
+    """Ratio de energía de gradientes horizontales vs verticales.
+
+    Fotos deformadas (aplastadas por iPhoto) tienen ratio alto (>1.5)
+    porque los gradientes horizontales dominan sobre los verticales.
+    Requiere OpenCV instalado.
+    """
+    if not _HAS_CV2:
+        return None
+    img = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        return None
+    gx = cv2.Sobel(img, cv2.CV_64F, 1, 0, ksize=3)
+    gy = cv2.Sobel(img, cv2.CV_64F, 0, 1, ksize=3)
+    energy_v = np.sum(gy**2)
+    if energy_v == 0:
+        return None
+    return float(np.sum(gx**2) / energy_v)
+
+
+def _has_exif_header(path: Path) -> bool:
+    """Comprueba si el archivo JPEG tiene cabecera EXIF (primeros 100 bytes)."""
+    with open(path, "rb") as f:
+        return b"Exif" in f.read(100)
 
 
 def _asset_path(originals_dir: Path, directory: str, uuid: str, filename: str) -> Path:
@@ -146,6 +186,20 @@ def scan_asset(
     ):
         result.status = Status.IPHOTO_ROTATED
         return result
+
+    # Detección 3: deformación por gradient ratio.
+    # Fotos sin EXIF header, portrait, con gradient ratio alto = deformadas por iPhoto.
+    # iPhoto borró el EXIF además de deformar los píxeles.
+    if (
+        result.status == Status.NO_EXIF
+        and _HAS_CV2
+        and h_real > w_real
+        and not _has_exif_header(path)
+    ):
+        gr = _gradient_ratio(path)
+        if gr is not None and gr > GRADIENT_THRESHOLD:
+            result.status = Status.DEFORMED
+            return result
 
     # Fallback: comparar PIL vs DB (solo si no hay EXIF de dimensiones).
     # Si EXIF está presente y coincide con PIL, la foto es correcta aunque la DB

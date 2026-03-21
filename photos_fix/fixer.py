@@ -88,6 +88,21 @@ def _fix_jpeg(path: Path, exif_dict: dict, w: int, h: int) -> None:
     piexif.insert(new_exif_bytes, str(path))
 
 
+def _fix_deformed(path: Path) -> None:
+    """Corrige deformación: resize(h, w) para intercambiar dimensiones.
+
+    Para fotos sin EXIF deformadas por iPhoto (gradient ratio alto).
+    Solo resize, sin rotación — el usuario rota manualmente en Photos.
+    """
+    with Image.open(path) as img:
+        w, h = img.size
+        if h <= w:
+            return  # landscape, no tocar
+        fixed = img.resize((h, w), Image.LANCZOS)
+    fixed.save(str(path), quality=95)
+    fixed.close()
+
+
 def _fix_iphoto_rotated(path: Path, backup_path: Path) -> None:
     """Corrige deformación de fotos portrait procesadas por iPhoto 9.
 
@@ -168,12 +183,17 @@ def fix_asset(
         fix_status=FixStatus.SKIPPED,
     )
 
-    if scan_result.status not in (Status.SWAP_CONFIRMED, Status.IPHOTO_ROTATED):
+    if scan_result.status not in (
+        Status.SWAP_CONFIRMED,
+        Status.IPHOTO_ROTATED,
+        Status.DEFORMED,
+    ):
         return result
 
     path = Path(scan_result.path)
     is_heic = path.suffix.lower() in _HEIC_EXTENSIONS
     is_iphoto = scan_result.status == Status.IPHOTO_ROTATED
+    is_deformed = scan_result.status == Status.DEFORMED
 
     if not is_iphoto:
         # SWAP_CONFIRMED necesita EXIF con dimensiones
@@ -231,7 +251,9 @@ def fix_asset(
 
     # Fix según tipo
     try:
-        if is_iphoto:
+        if is_deformed:
+            _fix_deformed(path)
+        elif is_iphoto:
             _fix_iphoto_rotated(path, backup_path)
         elif is_heic:
             _fix_heic(path, w, h)
@@ -272,7 +294,8 @@ def fix_batch(
     candidates = [
         r
         for r in scan_results
-        if r.status in (Status.SWAP_CONFIRMED, Status.IPHOTO_ROTATED)
+        if r.status
+        in (Status.SWAP_CONFIRMED, Status.IPHOTO_ROTATED, Status.DEFORMED)
     ]
     results = []
     total = len(candidates)
