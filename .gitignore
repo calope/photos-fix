@@ -11,3 +11,9 @@ reports/
 !tests/fixtures/*.json
 .DS_Store
 models/orientation_model_v2_0.9882.onnx
+backups*/
+models/*.onnx
+models/*.pth
+im000788.jpeg
+reports/
+quarantine/
