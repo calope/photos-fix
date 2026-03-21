@@ -263,6 +263,7 @@ def cmd_health(args: argparse.Namespace) -> None:
             icloud_rows,
             originals_dir=originals_dir,
             progress_callback=on_progress,
+            detect_rotation=args.detect_rotation,
         )
 
     summary = report.summary()
@@ -278,6 +279,9 @@ def cmd_health(args: argparse.Namespace) -> None:
     )
     print(
         f"  ⚠  DEFORMED            : {summary['deformed']}  ← deformación por gradient ratio"
+    )
+    print(
+        f"  ⚠  ROTATED             : {summary['rotated']}  ← rotación incorrecta (face detection)"
     )
     print(f"  ⚠  SUSPECT             : {summary['suspect']}")
     print(f"  ⚠  LOCAL_MISSING       : {summary['local_missing']}  ← solo en iCloud")
@@ -637,6 +641,11 @@ def main() -> None:
         "--output", default="reports", help="Directorio de salida (default: reports/)"
     )
     p_health.add_argument("--format", choices=["csv", "json", "both"], default="both")
+    p_health.add_argument(
+        "--detect-rotation",
+        action="store_true",
+        help="Detectar rotación incorrecta via face detection (lento)",
+    )
 
     # --- export ---
     p_export = sub.add_parser(

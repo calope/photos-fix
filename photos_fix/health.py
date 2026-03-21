@@ -57,6 +57,7 @@ class HealthReport:
             "swap_confirmed": scan_counts.get(Status.SWAP_CONFIRMED.value, 0),
             "iphoto_rotated": scan_counts.get(Status.IPHOTO_ROTATED.value, 0),
             "deformed": scan_counts.get(Status.DEFORMED.value, 0),
+            "rotated": scan_counts.get(Status.ROTATED.value, 0),
             "suspect": scan_counts.get(Status.SUSPECT.value, 0),
             "ok": scan_counts.get(Status.OK.value, 0),
             "no_exif": scan_counts.get(Status.NO_EXIF.value, 0),
@@ -75,6 +76,7 @@ class HealthReport:
                 "swap_confirmed",
                 "iphoto_rotated",
                 "deformed",
+                "rotated",
                 "suspect",
                 "local_missing",
                 "unreadable",
@@ -182,12 +184,16 @@ def run_health_check(
     icloud_rows: list[sqlite3.Row],
     originals_dir: Path = PHOTOS_ORIGINALS,
     progress_callback=None,
+    detect_rotation: bool = False,
 ) -> HealthReport:
     report = HealthReport()
 
     # 1. Scan completo (dimensiones EXIF, archivos ilegibles, LOCAL_MISSING)
     report.scan_results = scan_library(
-        assets, originals_dir, progress_callback=progress_callback
+        assets,
+        originals_dir,
+        progress_callback=progress_callback,
+        detect_rotation=detect_rotation,
     )
 
     # 2. Archivos de 0 bytes

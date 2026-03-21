@@ -41,6 +41,7 @@ class Status(str, Enum):
     SWAP_CONFIRMED = "SWAP_CONFIRMED"  # dimensiones EXIF exactamente intercambiadas
     IPHOTO_ROTATED = "IPHOTO_ROTATED"  # iPhoto 9 rotó píxeles y dejó Orientation=1
     DEFORMED = "DEFORMED"  # deformación detectada por gradient ratio (sin EXIF)
+    ROTATED = "ROTATED"  # foto rotada 90°/270° detectada por caras de lado
     SUSPECT = "SUSPECT"  # orientación opuesta entre PIL y DB, sin EXIF dims
     OK = "OK"
     LOCAL_MISSING = "LOCAL_MISSING"  # archivo no disponible localmente (en iCloud)
@@ -83,6 +84,52 @@ def _gradient_ratio(path: Path) -> float | None:
     return float(np.sum(gx**2) / energy_v)
 
 
+def _detect_rotation(path: Path) -> int | None:
+    """Detecta si la foto está rotada 90° usando detección de caras.
+
+    Prueba la imagen en 4 orientaciones (0°, 90°, 180°, 270°).
+    La orientación con más caras detectadas (y mayor confianza) es la correcta.
+    Retorna los grados de rotación necesarios para corregir (0, 90, 180, 270),
+    o None si no puede determinarse (sin caras o empate).
+    """
+    if not _HAS_CV2:
+        return None
+    img = cv2.imread(str(path))
+    if img is None:
+        return None
+
+    cascade = cv2.CascadeClassifier(
+        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    )
+
+    best_rotation = 0
+    best_faces = 0
+
+    for rotation in [0, 90, 180, 270]:
+        if rotation == 0:
+            rotated = img
+        elif rotation == 90:
+            rotated = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        elif rotation == 180:
+            rotated = cv2.rotate(img, cv2.ROTATE_180)
+        else:
+            rotated = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+
+        gray = cv2.cvtColor(rotated, cv2.COLOR_BGR2GRAY)
+        faces = cascade.detectMultiScale(
+            gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
+        )
+
+        if len(faces) > best_faces:
+            best_faces = len(faces)
+            best_rotation = rotation
+
+    if best_faces == 0 or best_rotation == 0:
+        return None  # sin caras o ya está bien orientada
+
+    return best_rotation
+
+
 def _has_exif_header(path: Path) -> bool:
     """Comprueba si el archivo JPEG tiene cabecera EXIF (primeros 100 bytes)."""
     with open(path, "rb") as f:
@@ -110,6 +157,7 @@ def _asset_path(originals_dir: Path, directory: str, uuid: str, filename: str) -
 def scan_asset(
     row: sqlite3.Row,
     originals_dir: Path = PHOTOS_ORIGINALS,
+    detect_rotation: bool = False,
 ) -> ScanResult:
     uuid = row["ZUUID"]
     filename = row["ZFILENAME"]
@@ -208,6 +256,20 @@ def scan_asset(
         if w_db and h_db and w_real == h_db and h_real == w_db and w_real != h_real:
             result.status = Status.SUSPECT
 
+    # Detección 4: rotación incorrecta por face detection.
+    # Solo si se solicita explícitamente (es costoso: 4 pasadas OpenCV por foto).
+    # Detecta fotos con caras de lado = rotadas 90°/270°.
+    if (
+        detect_rotation
+        and _HAS_CV2
+        and result.status in (Status.OK, Status.NO_EXIF)
+        and w_real != h_real
+    ):
+        rotation = _detect_rotation(path)
+        if rotation is not None:
+            result.status = Status.ROTATED
+            result.error = f"needs_rotation_{rotation}"
+
     return result
 
 
@@ -215,12 +277,13 @@ def scan_library(
     assets: list[sqlite3.Row],
     originals_dir: Path = PHOTOS_ORIGINALS,
     progress_callback=None,
+    detect_rotation: bool = False,
 ) -> list[ScanResult]:
     results = []
     total = len(assets)
 
     for i, row in enumerate(assets):
-        result = scan_asset(row, originals_dir)
+        result = scan_asset(row, originals_dir, detect_rotation=detect_rotation)
         results.append(result)
 
         if progress_callback:
