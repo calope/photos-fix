@@ -156,7 +156,7 @@ def cmd_fix(args: argparse.Namespace) -> None:
         r
         for r in scan_results
         if r.status
-        in (Status.SWAP_CONFIRMED, Status.IPHOTO_ROTATED, Status.DEFORMED)
+        in (Status.SWAP_CONFIRMED, Status.IPHOTO_ROTATED, Status.DEFORMED, Status.ROTATED)
     ]
 
     if not candidates:
@@ -390,7 +390,7 @@ def cmd_album(args: argparse.Namespace) -> None:
     if not input_path:
         reports_dir = Path("reports")
         # Si el filtro incluye estados de health, buscar health_scan_*.csv
-        health_states = {"SUSPECT", "SWAP_CONFIRMED", "IPHOTO_ROTATED", "DEFORMED", "NO_EXIF", "UNREADABLE", "ZERO_BYTE"}
+        health_states = {"SUSPECT", "SWAP_CONFIRMED", "IPHOTO_ROTATED", "DEFORMED", "ROTATED", "NO_EXIF", "UNREADABLE", "ZERO_BYTE"}
         use_health = bool(filters & health_states)
         glob_pattern = "health_scan_*.csv" if use_health else "fix_*.csv"
         csvs = (

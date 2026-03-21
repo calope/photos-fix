@@ -88,6 +88,27 @@ def _fix_jpeg(path: Path, exif_dict: dict, w: int, h: int) -> None:
     piexif.insert(new_exif_bytes, str(path))
 
 
+def _fix_rotated(path: Path, rotation: int) -> None:
+    """Rota la foto según lo detectado por face detection.
+
+    rotation: grados a rotar (90, 180, 270).
+    90 = rotar 90° CCW, 180 = voltear, 270 = rotar 90° CW.
+    """
+    rotation_map = {
+        90: Image.ROTATE_90,
+        180: Image.ROTATE_180,
+        270: Image.ROTATE_270,
+    }
+    transpose = rotation_map.get(rotation)
+    if not transpose:
+        return
+
+    with Image.open(path) as img:
+        fixed = img.transpose(transpose)
+    fixed.save(str(path), quality=95)
+    fixed.close()
+
+
 def _fix_deformed(path: Path) -> None:
     """Corrige deformación: resize(h, w) para intercambiar dimensiones.
 
@@ -187,6 +208,7 @@ def fix_asset(
         Status.SWAP_CONFIRMED,
         Status.IPHOTO_ROTATED,
         Status.DEFORMED,
+        Status.ROTATED,
     ):
         return result
 
@@ -194,8 +216,9 @@ def fix_asset(
     is_heic = path.suffix.lower() in _HEIC_EXTENSIONS
     is_iphoto = scan_result.status == Status.IPHOTO_ROTATED
     is_deformed = scan_result.status == Status.DEFORMED
+    is_rotated = scan_result.status == Status.ROTATED
 
-    if not is_iphoto:
+    if not is_iphoto and not is_deformed and not is_rotated:
         # SWAP_CONFIRMED necesita EXIF con dimensiones
         try:
             with Image.open(path) as img:
@@ -251,7 +274,11 @@ def fix_asset(
 
     # Fix según tipo
     try:
-        if is_deformed:
+        if is_rotated:
+            # Extraer grados del campo error: "needs_rotation_90"
+            rot = int(scan_result.error.split("_")[-1]) if scan_result.error else 0
+            _fix_rotated(path, rot)
+        elif is_deformed:
             _fix_deformed(path)
         elif is_iphoto:
             _fix_iphoto_rotated(path, backup_path)
@@ -295,7 +322,12 @@ def fix_batch(
         r
         for r in scan_results
         if r.status
-        in (Status.SWAP_CONFIRMED, Status.IPHOTO_ROTATED, Status.DEFORMED)
+        in (
+            Status.SWAP_CONFIRMED,
+            Status.IPHOTO_ROTATED,
+            Status.DEFORMED,
+            Status.ROTATED,
+        )
     ]
     results = []
     total = len(candidates)
