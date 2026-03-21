@@ -10,3 +10,4 @@ reports/
 *.json
 !tests/fixtures/*.json
 .DS_Store
+models/orientation_model_v2_0.9882.onnx
