@@ -84,50 +84,59 @@ def _gradient_ratio(path: Path) -> float | None:
     return float(np.sum(gx**2) / energy_v)
 
 
+_onnx_session = None
+
+# Mapeo del modelo EfficientNetV2 de DuarteBarbosa:
+# Class 0 = OK, Class 1 = needs 270° (90° CW), Class 2 = needs 180°, Class 3 = needs 90° (90° CCW)
+_ONNX_CLASS_TO_CORRECTION = {0: None, 1: 270, 2: 180, 3: 90}
+_ONNX_MODEL_PATH = Path(__file__).parent.parent / "models" / "orientation_model_v2_0.9882.onnx"
+
+
+def _get_onnx_session():
+    """Carga el modelo ONNX bajo demanda (singleton)."""
+    global _onnx_session
+    if _onnx_session is None:
+        try:
+            import onnxruntime as ort
+
+            if _ONNX_MODEL_PATH.exists():
+                _onnx_session = ort.InferenceSession(str(_ONNX_MODEL_PATH))
+            else:
+                return None
+        except ImportError:
+            return None
+    return _onnx_session
+
+
 def _detect_rotation(path: Path) -> int | None:
-    """Detecta si la foto está rotada 90° usando detección de caras.
+    """Detecta si la foto está rotada usando EfficientNetV2 ONNX (98.82% accuracy).
 
-    Prueba la imagen en 4 orientaciones (0°, 90°, 180°, 270°).
-    La orientación con más caras detectadas (y mayor confianza) es la correcta.
-    Retorna los grados de rotación necesarios para corregir (0, 90, 180, 270),
-    o None si no puede determinarse (sin caras o empate).
+    Clasifica la imagen en 4 orientaciones y devuelve los grados de corrección
+    necesarios (90, 180, 270) o None si está correcta.
     """
-    if not _HAS_CV2:
-        return None
-    img = cv2.imread(str(path))
-    if img is None:
+    session = _get_onnx_session()
+    if session is None:
         return None
 
-    cascade = cv2.CascadeClassifier(
-        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-    )
+    try:
+        input_name = session.get_inputs()[0].name
+        input_shape = session.get_inputs()[0].shape
 
-    best_rotation = 0
-    best_faces = 0
+        with Image.open(path) as img:
+            img_r = img.convert("RGB").resize((input_shape[3], input_shape[2]))
 
-    for rotation in [0, 90, 180, 270]:
-        if rotation == 0:
-            rotated = img
-        elif rotation == 90:
-            rotated = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
-        elif rotation == 180:
-            rotated = cv2.rotate(img, cv2.ROTATE_180)
-        else:
-            rotated = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+        arr = np.array(img_r, dtype=np.float32) / 255.0
+        arr = (arr - [0.485, 0.456, 0.406]) / [0.229, 0.224, 0.225]
+        arr = np.expand_dims(arr.transpose(2, 0, 1).astype(np.float32), 0)
 
-        gray = cv2.cvtColor(rotated, cv2.COLOR_BGR2GRAY)
-        faces = cascade.detectMultiScale(
-            gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
-        )
+        probs = session.run(None, {input_name: arr})[0][0]
+        exp_p = np.exp(probs - np.max(probs))
+        probs = exp_p / exp_p.sum()
+        idx = int(np.argmax(probs))
 
-        if len(faces) > best_faces:
-            best_faces = len(faces)
-            best_rotation = rotation
-
-    if best_faces == 0 or best_rotation == 0:
-        return None  # sin caras o ya está bien orientada
-
-    return best_rotation
+        return _ONNX_CLASS_TO_CORRECTION[idx]
+    except Exception:
+        return None
 
 
 def _has_exif_header(path: Path) -> bool:
