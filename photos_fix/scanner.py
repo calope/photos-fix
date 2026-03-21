@@ -34,7 +34,7 @@ register_heif_opener()  # habilita PIL.Image.open() para HEIC/HEIF
 from photos_fix import PHOTOS_ORIGINALS
 
 
-GRADIENT_THRESHOLD = 1.4  # ratio H/V por encima del cual se considera deformada (F1=0.950)
+GRADIENT_THRESHOLD = 1.7  # ratio H/V por encima del cual se considera deformada (F1=0.912)
 
 
 class Status(str, Enum):
